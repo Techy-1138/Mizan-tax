@@ -12,7 +12,8 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../theme/tokens';
+import { ThemeColors } from '../theme/tokens';
+import { useThemedStyles } from '../context/ThemeContext';
 import { motionSprings } from './easings';
 import { motionDurations } from './motionTokens';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
@@ -32,6 +33,7 @@ export const AnimatedTabIcon: React.FC<AnimatedTabIconProps> = ({
   color,
   size = 22,
 }) => {
+  const styles = useThemedStyles(createStyles);
   const isReducedMotion = useReduceMotionPreference();
   const iconScale = useSharedValue<number>(focused ? 1.06 : 1.0);
   const indicatorWidth = useSharedValue<number>(focused ? 18 : 0);
@@ -86,22 +88,23 @@ export const AnimatedTabIcon: React.FC<AnimatedTabIconProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 28,
-    position: 'relative',
-  },
-  indicator: {
-    position: 'absolute',
-    top: -6,
-    height: 3,
-    backgroundColor: colors.brand.primary,
-    borderRadius: 2,
-  },
-  iconWrapper: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      height: 28,
+      position: 'relative',
+    },
+    indicator: {
+      position: 'absolute',
+      top: -6,
+      height: 3,
+      backgroundColor: colors.brand.primary,
+      borderRadius: 2,
+    },
+    iconWrapper: {
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+  });

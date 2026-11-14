@@ -12,7 +12,9 @@ import {
   STORAGE_KEY_USER_PROFILE,
 } from '../services/api';
 import { AppStorage } from '../utils/storage';
-import { auth, onAuthStateChanged } from '../services/firebase';
+import { auth, onAuthStateChanged, updateProfile } from '../services/firebase';
+import { FirestoreService } from '../services/firestore.service';
+import { AppPreferences } from '../utils/preferences';
 
 export interface BusinessEntity {
   id: string;
@@ -42,6 +44,8 @@ export interface UserProfile {
   id: string;
   email: string;
   fullName: string;
+  username?: string | null;
+  profilePictureUrl?: string | null;
   phone?: string | null;
   role?: string;
   organisationName?: string;
@@ -62,10 +66,18 @@ interface BusinessContextType {
   currentUserKey: 'user-a' | 'user-b' | 'superadmin';
   setActiveBusinessId: (id: string) => void;
   addOrUpdateBusiness: (entity: Partial<BusinessEntity>) => Promise<BusinessEntity>;
+  deleteBusiness: (businessId: string) => Promise<void>;
   refreshBusinesses: () => Promise<void>;
   switchTenantUser: (userKey: 'user-a' | 'user-b' | 'superadmin') => Promise<void>;
   logout: () => Promise<void>;
   loadUserProfile: () => Promise<UserProfile | null>;
+  updateUserProfile: (updates: {
+    fullName?: string;
+    username?: string;
+    profilePictureUrl?: string | null;
+    phone?: string | null;
+    organisationName?: string;
+  }) => Promise<UserProfile>;
 }
 
 const BusinessContext = createContext<BusinessContextType | undefined>(undefined);
@@ -90,13 +102,21 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // 1. Instant resolution from Firebase Auth session (0 ms latency)
       if (auth.currentUser) {
         const u = auth.currentUser;
+        let customProfile: Partial<UserProfile> = {};
+        try {
+          const storedProfileStr = await AppStorage.getItem(STORAGE_KEY_USER_PROFILE);
+          if (storedProfileStr) customProfile = JSON.parse(storedProfileStr);
+        } catch {}
+
         const profile: UserProfile = {
           id: u.uid,
           email: u.email || '',
-          fullName: u.displayName || u.email?.split('@')[0] || 'Tax Admin',
-          phone: u.phoneNumber || undefined,
+          fullName: customProfile.fullName || u.displayName || u.email?.split('@')[0] || 'Tax Admin',
+          username: customProfile.username || u.displayName?.replace(/\s+/g, '_').toLowerCase() || 'tax_admin',
+          profilePictureUrl: customProfile.profilePictureUrl || u.photoURL || null,
+          phone: customProfile.phone || u.phoneNumber || undefined,
           role: 'ADMIN',
-          organisationName: u.displayName ? `${u.displayName}'s Entity` : 'UAE Enterprise',
+          organisationName: customProfile.organisationName || (u.displayName ? `${u.displayName}'s Entity` : 'UAE Enterprise'),
         };
         setCurrentUser(profile);
         setIsAuthenticated(true);
@@ -284,7 +304,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (exists) {
       setActiveBusinessIdState(id);
       AppStorage.setItem(STORAGE_KEY_ACTIVE_BIZ, id).catch(() => {});
-      Haptics.selectionAsync().catch(() => {});
+      AppPreferences.selection();
     }
   }, [businesses]);
 
@@ -343,7 +363,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       setActiveBusinessIdState(savedBusiness.id);
       await AppStorage.setItem(STORAGE_KEY_ACTIVE_BIZ, savedBusiness.id);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
       return savedBusiness;
     } catch (err: any) {
       setError(err?.message || 'Failed to save trade license');
@@ -352,6 +372,92 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setIsLoading(false);
     }
   }, []);
+
+  const deleteBusiness = useCallback(
+    async (businessId: string): Promise<void> => {
+      setIsLoading(true);
+      try {
+        await MizanApi.deleteBusiness(businessId);
+
+        const remaining = businesses.filter((b) => b.id !== businessId);
+        setBusinesses(remaining);
+        await AppStorage.setItem(STORAGE_KEY_CACHED_BUSINESSES, JSON.stringify(remaining));
+
+        if (activeBusinessId === businessId) {
+          const nextActive = remaining.length > 0 ? remaining[0].id : null;
+          setActiveBusinessIdState(nextActive);
+          if (nextActive) {
+            await AppStorage.setItem(STORAGE_KEY_ACTIVE_BIZ, nextActive);
+          } else {
+            await AppStorage.removeItem(STORAGE_KEY_ACTIVE_BIZ);
+          }
+        }
+        AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
+      } catch (err: any) {
+        setError(err?.message || 'Failed to delete business');
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [activeBusinessId, businesses]
+  );
+
+  const updateUserProfile = useCallback(
+    async (updates: {
+      fullName?: string;
+      username?: string;
+      profilePictureUrl?: string | null;
+      phone?: string | null;
+      organisationName?: string;
+    }): Promise<UserProfile> => {
+      const current = currentUser || {
+        id: auth.currentUser?.uid || 'user-admin',
+        email: auth.currentUser?.email || '',
+        fullName: 'Tax Admin',
+      };
+
+      const updatedProfile: UserProfile = {
+        ...current,
+        fullName: updates.fullName !== undefined ? updates.fullName : current.fullName,
+        username: updates.username !== undefined ? updates.username : current.username,
+        profilePictureUrl:
+          updates.profilePictureUrl !== undefined ? updates.profilePictureUrl : current.profilePictureUrl,
+        phone: updates.phone !== undefined ? updates.phone : current.phone,
+        organisationName:
+          updates.organisationName !== undefined ? updates.organisationName : current.organisationName,
+      };
+
+      setCurrentUser(updatedProfile);
+      await AppStorage.setItem(STORAGE_KEY_USER_PROFILE, JSON.stringify(updatedProfile));
+
+      // Persist to Firebase Auth if signed in
+      if (auth.currentUser) {
+        try {
+          await updateProfile(auth.currentUser, {
+            displayName: updatedProfile.fullName,
+            photoURL: updatedProfile.profilePictureUrl || undefined,
+          });
+        } catch (e) {
+          console.warn('Firebase Auth updateProfile warning:', e);
+        }
+
+        try {
+          await FirestoreService.saveUserProfile({
+            displayName: updatedProfile.fullName,
+            phoneNumber: updatedProfile.phone || undefined,
+            email: updatedProfile.email,
+          });
+        } catch (e) {
+          console.warn('Firestore user profile sync warning:', e);
+        }
+      }
+
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
+      return updatedProfile;
+    },
+    [currentUser]
+  );
 
   const refreshBusinesses = useCallback(async () => {
     await fetchBusinesses();
@@ -362,7 +468,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     await AppStorage.setItem(STORAGE_KEY_USER_KEY, userKey);
     await MizanApi.initSession(userKey);
     await fetchBusinesses();
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Medium);
   }, [fetchBusinesses]);
 
   const logout = useCallback(async () => {
@@ -371,7 +477,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setActiveBusinessIdState(null);
     setCurrentUser(null);
     setIsAuthenticated(false);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
   }, []);
 
   const activeBusiness = businesses.find((b) => b.id === activeBusinessId) || businesses[0] || null;
@@ -390,10 +496,12 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         currentUserKey,
         setActiveBusinessId,
         addOrUpdateBusiness,
+        deleteBusiness,
         refreshBusinesses,
         switchTenantUser,
         logout,
         loadUserProfile,
+        updateUserProfile,
       }}
     >
       {children}

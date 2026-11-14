@@ -6,7 +6,8 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { colors } from '../theme/tokens';
+import { ThemeColors } from '../theme/tokens';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import {
   AnimatedPressable,
   AnimatedFade,
@@ -28,6 +29,9 @@ import {
 } from './index';
 
 export const MotionShowcase: React.FC = () => {
+  // Bind showcase showcase card and progress bar track to the active theme
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [isFadeVisible, setIsFadeVisible] = useState(true);
   const [isSlideVisible, setIsSlideVisible] = useState(true);
   const [isCardExpanded, setIsCardExpanded] = useState(false);
@@ -278,7 +282,7 @@ export const MotionShowcase: React.FC = () => {
           <AnimatedProgressBar
             progress={progressValue}
             height={8}
-            trackColor="#EAE6E1"
+            trackColor={colors.neutral.border}
             barColor={colors.brand.primary}
           />
         </View>
@@ -311,7 +315,7 @@ export const MotionShowcase: React.FC = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors, isDark: boolean) => StyleSheet.create({
   container: {
     padding: 16,
     backgroundColor: colors.neutral.surface,
@@ -335,10 +339,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   badgeNormal: {
-    backgroundColor: 'rgba(0, 200, 83, 0.12)',
+    backgroundColor: colors.semantic.successBg,
   },
   badgeReduced: {
-    backgroundColor: 'rgba(255, 145, 0, 0.15)',
+    backgroundColor: colors.semantic.warningBg,
   },
   badgeText: {
     fontSize: 11,
@@ -368,7 +372,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   actionButtonText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontWeight: '700',
     fontSize: 13,
   },
@@ -477,7 +481,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textPrimary,
   },
   itemTag: {
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 6,

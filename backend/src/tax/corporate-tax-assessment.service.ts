@@ -153,8 +153,16 @@ export class CorporateTaxAssessmentService {
       if (category === 'INVENTORY_PURCHASES') {
         cogsAED = cogsAED.plus(expSubtotalAED);
         categoryMap[category].deductible = categoryMap[category].deductible.plus(expSubtotalAED);
-      } else if (category === 'ENTERTAINMENT' || category === 'CLIENT_ENTERTAINMENT') {
-        // Art. 32: 50% non-deductible
+      } else if (
+        category === 'ENTERTAINMENT' ||
+        category === 'CLIENT_ENTERTAINMENT' ||
+        category === 'MEALS_ENTERTAINMENT' ||
+        (exp as any).isEntertainmentSplit ||
+        (exp.notes && exp.notes.includes('Article 32 Entertainment 50% split'))
+      ) {
+        // Article 32 of Federal Decree-Law No. (47) of 2022:
+        // Entertainment, amusement, or recreation expenditures (including hospitality, accommodation, food, drinks)
+        // are restricted to a maximum 50% tax deduction. The remaining 50% is added back to taxable income.
         clientEntertainmentExpenseAED = clientEntertainmentExpenseAED.plus(expSubtotalAED);
         operatingExpensesAED = operatingExpensesAED.plus(expSubtotalAED);
         const half = expSubtotalAED.times(0.5);

@@ -108,6 +108,11 @@ export interface TranslationSchema {
     biometricsActive: string;
     documentVault: string;
     documentsCount: string;
+    appearance: string;
+    appearanceDesc: string;
+    themeSystem: string;
+    themeLight: string;
+    themeDark: string;
   };
   common: {
     aed: string;
@@ -226,6 +231,11 @@ export const translations: Record<Locale, TranslationSchema> = {
       biometricsActive: 'Face ID & UAE Pass Enabled',
       documentVault: 'Statutory Document Vault',
       documentsCount: 'Trade Licenses, TRNs & Leases',
+      appearance: 'Appearance & Theme',
+      appearanceDesc: 'Choose System, Light, or Dark mode',
+      themeSystem: 'System',
+      themeLight: 'Light',
+      themeDark: 'Dark',
     },
     common: {
       aed: 'AED',
@@ -343,6 +353,11 @@ export const translations: Record<Locale, TranslationSchema> = {
       biometricsActive: 'بصمة الوجه والهوية الرقمية مفعلة',
       documentVault: 'خزنة المستندات الرسمية',
       documentsCount: 'الرخص والشهادات وعقود الإيجار',
+      appearance: 'المظهر والسمة',
+      appearanceDesc: 'تبديل بين وضع النظام والفاتح والداكن',
+      themeSystem: 'النظام',
+      themeLight: 'فاتح',
+      themeDark: 'داكن',
     },
     common: {
       aed: 'د.إ',

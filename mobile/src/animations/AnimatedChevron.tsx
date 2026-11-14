@@ -11,7 +11,7 @@ import Animated, {
   withSpring,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../theme/tokens';
+import { useTheme } from '../context/ThemeContext';
 import { motionSprings } from './easings';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
 
@@ -37,9 +37,11 @@ export interface AnimatedChevronProps {
 export const AnimatedChevron: React.FC<AnimatedChevronProps> = ({
   expanded,
   size = 18,
-  color = colors.neutral.textSecondary,
+  color,
   style,
 }) => {
+  const { colors } = useTheme();
+  const resolvedColor = color || colors.neutral.textSecondary;
   const isReducedMotion = useReduceMotionPreference();
   const rotation = useSharedValue<number>(expanded ? 180 : 0);
 
@@ -60,7 +62,7 @@ export const AnimatedChevron: React.FC<AnimatedChevronProps> = ({
 
   return (
     <Animated.View style={[style, animatedStyle]}>
-      <Ionicons name="chevron-down" size={size} color={color} />
+      <Ionicons name="chevron-down" size={size} color={resolvedColor} />
     </Animated.View>
   );
 };

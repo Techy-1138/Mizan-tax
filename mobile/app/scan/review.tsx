@@ -15,16 +15,17 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  Modal,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from '../../src/components/SafeAreaView';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { AppPreferences } from '../../src/utils/preferences';
+import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
-import { useReduceMotionPreference } from '../../src/animations';
+import { useReduceMotionPreference, SmoothModal } from '../../src/animations';
 
 type StepState = 'review' | 'verifying' | 'verified';
 
@@ -33,6 +34,9 @@ export default function TradeLicenseReviewScreen() {
   const params = useLocalSearchParams();
   const { isRTL } = useLocale();
   const { addOrUpdateBusiness } = useBusiness();
+  // Resolve reactive theme colors & styles for Light/Dark transitions
+  const { colors, isDark } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const [currentStep, setCurrentStep] = useState<StepState>('review');
   const [detChecked, setDetChecked] = useState(false);
@@ -114,7 +118,7 @@ export default function TradeLicenseReviewScreen() {
     setBusinessActivity(tempActivity.trim());
     setVatTrn(tempVatTrn.trim());
     setIsEditModalOpen(false);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
   };
 
   // Animation sequence for verification
@@ -124,7 +128,7 @@ export default function TradeLicenseReviewScreen() {
       return;
     }
 
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Medium);
     setCurrentStep('verifying');
 
     if (isReducedMotion) {
@@ -132,7 +136,7 @@ export default function TradeLicenseReviewScreen() {
       setQrChecked(true);
       setStatusChecked(true);
       setCurrentStep('verified');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
       return;
     }
 
@@ -141,7 +145,7 @@ export default function TradeLicenseReviewScreen() {
     const t3 = setTimeout(() => {
       setStatusChecked(true);
       setCurrentStep('verified');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
     }, 1500);
 
     timeoutsRef.current.push(t1, t2, t3);
@@ -195,7 +199,7 @@ export default function TradeLicenseReviewScreen() {
           extractionStatus === 'SUCCESS' ? 'OCR_EXTRACTED' : 'MANUALLY_ENTERED',
       });
 
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
       router.push('/(tabs)');
     } catch (e: any) {
       console.warn('Backend business persistence error:', e?.message || e);
@@ -245,7 +249,7 @@ export default function TradeLicenseReviewScreen() {
             {/* Step 1: Scan (Complete) */}
             <View style={styles.stepCol}>
               <View style={[styles.stepCircle, styles.stepCircleComplete]}>
-                <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+                <Ionicons name="checkmark" size={14} color={colors.neutral.onPrimary} />
               </View>
               <Text style={styles.stepLabel}>Scan</Text>
             </View>
@@ -263,7 +267,7 @@ export default function TradeLicenseReviewScreen() {
                 ]}
               >
                 {currentStep !== 'review' ? (
-                  <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+                  <Ionicons name="checkmark" size={14} color={colors.neutral.onPrimary} />
                 ) : (
                   <Text style={styles.stepNumActive}>2</Text>
                 )}
@@ -291,7 +295,7 @@ export default function TradeLicenseReviewScreen() {
                 ]}
               >
                 {currentStep === 'verified' ? (
-                  <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+                  <Ionicons name="checkmark" size={14} color={colors.neutral.onPrimary} />
                 ) : (
                   <Text
                     style={
@@ -356,7 +360,7 @@ export default function TradeLicenseReviewScreen() {
               <View style={styles.docPreviewThumb}>
                 <Ionicons name="document-text" size={32} color={colors.brand.primary} />
                 <TouchableOpacity style={styles.expandThumbBtn} onPress={openEditModal}>
-                  <Ionicons name="pencil" size={14} color="#FFFFFF" />
+                  <Ionicons name="pencil" size={14} color={colors.neutral.onPrimary} />
                 </TouchableOpacity>
               </View>
 
@@ -364,7 +368,7 @@ export default function TradeLicenseReviewScreen() {
                 <View
                   style={[
                     styles.scannedBadge,
-                    !isOcrSuccess && { backgroundColor: '#F3F4F6' },
+                    !isOcrSuccess && { backgroundColor: colors.neutral.surfaceInset },
                   ]}
                 >
                   <Ionicons
@@ -641,7 +645,7 @@ export default function TradeLicenseReviewScreen() {
                 disabled={isSaving}
               >
                 {isSaving ? (
-                  <ActivityIndicator color="#FFFFFF" />
+                  <ActivityIndicator color={colors.neutral.onPrimary} />
                 ) : (
                   <Text style={styles.primaryActionText}>Confirm & Save Business Entity →</Text>
                 )}
@@ -656,129 +660,133 @@ export default function TradeLicenseReviewScreen() {
       {/* ==================================================================== */}
       {/* EDIT MODAL: ALLOWS USER TO CORRECT EXTRACTED OR ENTER MANUAL FIELDS  */}
       {/* ==================================================================== */}
-      <Modal visible={isEditModalOpen} animationType="slide" transparent>
-        <SafeAreaView style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit Business Details</Text>
-              <TouchableOpacity onPress={() => setIsEditModalOpen(false)}>
-                <Ionicons name="close" size={24} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
+      <SmoothModal visible={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} maxWidth={460}>
+        {/* SmoothModal already provides themed surfaceRaised card */}
+        <View style={{ width: '100%', padding: spacing.lg }}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Edit Business Details</Text>
+            <TouchableOpacity onPress={() => setIsEditModalOpen(false)}>
+              <Ionicons name="close" size={24} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Legal Trade Name *</Text>
+              <TextInput
+                style={styles.textInput}
+                value={tempTradeName}
+                onChangeText={setTempTradeName}
+                placeholder="e.g. Al Nahda Trading LLC"
+                placeholderTextColor={colors.neutral.textTertiary}
+                keyboardAppearance={isDark ? 'dark' : 'light'}
+              />
             </View>
 
-            <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Legal Trade Name *</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={tempTradeName}
-                  onChangeText={setTempTradeName}
-                  placeholder="e.g. Al Nahda Trading LLC"
-                  placeholderTextColor={colors.neutral.textTertiary}
-                />
-              </View>
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Trade License Number *</Text>
+              <TextInput
+                style={styles.textInput}
+                value={tempLicenseNumber}
+                onChangeText={setTempLicenseNumber}
+                placeholder="e.g. 1234567"
+                placeholderTextColor={colors.neutral.textTertiary}
+                keyboardAppearance={isDark ? 'dark' : 'light'}
+              />
+            </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Trade License Number *</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={tempLicenseNumber}
-                  onChangeText={setTempLicenseNumber}
-                  placeholder="e.g. 1234567"
-                  placeholderTextColor={colors.neutral.textTertiary}
-                />
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Legal Form</Text>
-                <View style={styles.pillRow}>
-                  {['Limited Liability Company (LLC)', 'Free Zone Company (FZCO)', 'Sole Establishment', 'Natural Person'].map(
-                    (form) => (
-                      <TouchableOpacity
-                        key={form}
-                        style={[styles.choicePill, tempLegalStatus === form && styles.choicePillActive]}
-                        onPress={() => setTempLegalStatus(form)}
-                      >
-                        <Text
-                          style={[
-                            styles.choicePillText,
-                            tempLegalStatus === form && styles.choicePillTextActive,
-                          ]}
-                        >
-                          {form}
-                        </Text>
-                      </TouchableOpacity>
-                    )
-                  )}
-                </View>
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Emirate</Text>
-                <View style={styles.pillRow}>
-                  {['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah'].map((em) => (
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Legal Form</Text>
+              <View style={styles.pillRow}>
+                {['Limited Liability Company (LLC)', 'Free Zone Company (FZCO)', 'Sole Establishment', 'Natural Person'].map(
+                  (form) => (
                     <TouchableOpacity
-                      key={em}
-                      style={[styles.choicePill, tempEmirate === em && styles.choicePillActive]}
-                      onPress={() => setTempEmirate(em)}
+                      key={form}
+                      style={[styles.choicePill, tempLegalStatus === form && styles.choicePillActive]}
+                      onPress={() => setTempLegalStatus(form)}
                     >
                       <Text
                         style={[
                           styles.choicePillText,
-                          tempEmirate === em && styles.choicePillTextActive,
+                          tempLegalStatus === form && styles.choicePillTextActive,
                         ]}
                       >
-                        {em}
+                        {form}
                       </Text>
                     </TouchableOpacity>
-                  ))}
-                </View>
+                  )
+                )}
               </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Business Activity</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={tempActivity}
-                  onChangeText={setTempActivity}
-                  placeholder="e.g. General Commercial Trading"
-                  placeholderTextColor={colors.neutral.textTertiary}
-                />
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>VAT TRN (Optional)</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={tempVatTrn}
-                  onChangeText={setTempVatTrn}
-                  placeholder="15-digit TRN (e.g. 100234567800003)"
-                  placeholderTextColor={colors.neutral.textTertiary}
-                  keyboardType="numeric"
-                  maxLength={15}
-                />
-              </View>
-            </ScrollView>
-
-            <View style={styles.modalFooter}>
-              <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => setIsEditModalOpen(false)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalSaveBtn} onPress={saveEdits}>
-                <Text style={styles.modalSaveText}>Save Changes</Text>
-              </TouchableOpacity>
             </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Emirate</Text>
+              <View style={styles.pillRow}>
+                {['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah'].map((em) => (
+                  <TouchableOpacity
+                    key={em}
+                    style={[styles.choicePill, tempEmirate === em && styles.choicePillActive]}
+                    onPress={() => setTempEmirate(em)}
+                  >
+                    <Text
+                      style={[
+                        styles.choicePillText,
+                        tempEmirate === em && styles.choicePillTextActive,
+                      ]}
+                    >
+                      {em}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Business Activity</Text>
+              <TextInput
+                style={styles.textInput}
+                value={tempActivity}
+                onChangeText={setTempActivity}
+                placeholder="e.g. General Commercial Trading"
+                placeholderTextColor={colors.neutral.textTertiary}
+                keyboardAppearance={isDark ? 'dark' : 'light'}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>VAT TRN (Optional)</Text>
+              <TextInput
+                style={styles.textInput}
+                value={tempVatTrn}
+                onChangeText={setTempVatTrn}
+                placeholder="15-digit TRN (e.g. 100234567800003)"
+                placeholderTextColor={colors.neutral.textTertiary}
+                keyboardAppearance={isDark ? 'dark' : 'light'}
+                keyboardType="numeric"
+                maxLength={15}
+              />
+            </View>
+          </ScrollView>
+
+          <View style={styles.modalFooter}>
+            <TouchableOpacity
+              style={styles.modalCancelBtn}
+              onPress={() => setIsEditModalOpen(false)}
+            >
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.modalSaveBtn} onPress={saveEdits}>
+              <Text style={styles.modalSaveText}>Save Changes</Text>
+            </TouchableOpacity>
           </View>
-        </SafeAreaView>
-      </Modal>
+        </View>
+      </SmoothModal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic theme-aware stylesheet factory for TradeLicenseReviewScreen
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -846,7 +854,7 @@ const styles = StyleSheet.create({
     borderColor: colors.neutral.border,
   },
   stepNumActive: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 12,
     fontWeight: '800',
   },
@@ -1026,7 +1034,7 @@ const styles = StyleSheet.create({
     ...shadows.card,
   },
   primaryActionText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 15,
     fontWeight: '800',
   },
@@ -1088,11 +1096,11 @@ const styles = StyleSheet.create({
     color: colors.neutral.textSecondary,
   },
   verifiedGreenBanner: {
-    backgroundColor: '#F0FDF4',
+    backgroundColor: colors.semantic.successBg,
     borderRadius: radii.xl,
     padding: spacing.md,
     borderWidth: 1,
-    borderColor: '#BBF7D0',
+    borderColor: colors.semantic.successBorder,
     gap: 12,
   },
   verifiedBannerHeader: {
@@ -1102,11 +1110,11 @@ const styles = StyleSheet.create({
   verifiedBannerTitle: {
     fontSize: 15,
     fontWeight: '800',
-    color: colors.semantic.successDark,
+    color: colors.semantic.successText,
   },
   verifiedBannerDesc: {
     fontSize: 12,
-    color: colors.semantic.successDark,
+    color: colors.semantic.successText,
     lineHeight: 16,
   },
   verifiedStatsRow: {
@@ -1114,7 +1122,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: '#DCFCE7',
+    borderTopColor: colors.semantic.successBorder,
   },
   verifiedStatCol: {
     flex: 1,
@@ -1139,11 +1147,11 @@ const styles = StyleSheet.create({
   activeTagText: {
     fontSize: 10,
     fontWeight: '800',
-    color: colors.semantic.successDark,
+    color: colors.semantic.successText,
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: colors.neutral.scrim,
     justifyContent: 'flex-end',
   },
   modalCard: {
@@ -1240,6 +1248,6 @@ const styles = StyleSheet.create({
   modalSaveText: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
   },
 });

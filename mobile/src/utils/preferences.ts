@@ -6,18 +6,24 @@
 
 import * as Haptics from 'expo-haptics';
 import { AppStorage } from './storage';
+import type { ThemeMode } from '../theme/tokens';
 
 export const STORAGE_KEY_APP_PREFERENCES = 'mizan_app_preferences';
 
 export interface AppPreferencesState {
   hapticsEnabled: boolean;
   shutterSoundEnabled: boolean;
+  /**
+   * User appearance preference: 'system' follows OS Light/Dark, or explicit override.
+   */
+  themeMode: ThemeMode;
 }
 
-// Default preferences: Haptics and Shutter Sound are both strictly disabled by default
+// Default preferences: Haptics & Shutter Sound OFF; Theme follows device OS ('system')
 const DEFAULT_PREFERENCES: AppPreferencesState = {
   hapticsEnabled: false,
   shutterSoundEnabled: false,
+  themeMode: 'system',
 };
 
 // In-memory cache for synchronous zero-latency lookups across UI interactions
@@ -34,9 +40,14 @@ export class AppPreferences {
       const stored = await AppStorage.getItem(STORAGE_KEY_APP_PREFERENCES);
       if (stored) {
         const parsed = JSON.parse(stored);
+        const validTheme: ThemeMode =
+          parsed.themeMode === 'light' || parsed.themeMode === 'dark' || parsed.themeMode === 'system'
+            ? parsed.themeMode
+            : 'system';
         cachedPreferences = {
-          hapticsEnabled: parsed.hapticsEnabled ?? false,
-          shutterSoundEnabled: parsed.shutterSoundEnabled ?? false,
+          hapticsEnabled: parsed.hapticsEnabled === true,
+          shutterSoundEnabled: parsed.shutterSoundEnabled === true,
+          themeMode: validTheme,
         };
       } else {
         cachedPreferences = { ...DEFAULT_PREFERENCES };
@@ -67,6 +78,13 @@ export class AppPreferences {
    */
   public static isShutterSoundEnabled(): boolean {
     return cachedPreferences.shutterSoundEnabled;
+  }
+
+  /**
+   * Returns the persisted theme mode ('system' | 'light' | 'dark') synchronously
+   */
+  public static getThemeMode(): ThemeMode {
+    return cachedPreferences.themeMode;
   }
 
   /**

@@ -42,6 +42,66 @@ export const CBUAE_OFFICIAL_RATES: Record<string, CbUaeRate> = {
     currencyNameAr: 'ريال سعودي',
     rateToAED: 0.979,
   },
+  QAR: {
+    currencyCode: 'QAR',
+    currencyNameEn: 'Qatari Riyal',
+    currencyNameAr: 'ريال قطري',
+    rateToAED: 1.0089,
+  },
+  KWD: {
+    currencyCode: 'KWD',
+    currencyNameEn: 'Kuwaiti Dinar',
+    currencyNameAr: 'دينار كويتي',
+    rateToAED: 11.972,
+  },
+  BHD: {
+    currencyCode: 'BHD',
+    currencyNameEn: 'Bahraini Dinar',
+    currencyNameAr: 'دينار بحريني',
+    rateToAED: 9.741,
+  },
+  OMR: {
+    currencyCode: 'OMR',
+    currencyNameEn: 'Omani Rial',
+    currencyNameAr: 'ريال عماني',
+    rateToAED: 9.539,
+  },
+  INR: {
+    currencyCode: 'INR',
+    currencyNameEn: 'Indian Rupee',
+    currencyNameAr: 'روبية هندية',
+    rateToAED: 0.0435,
+  },
+  CAD: {
+    currencyCode: 'CAD',
+    currencyNameEn: 'Canadian Dollar',
+    currencyNameAr: 'دولار كندي',
+    rateToAED: 2.712,
+  },
+  AUD: {
+    currencyCode: 'AUD',
+    currencyNameEn: 'Australian Dollar',
+    currencyNameAr: 'دولار أسترالي',
+    rateToAED: 2.415,
+  },
+  CHF: {
+    currencyCode: 'CHF',
+    currencyNameEn: 'Swiss Franc',
+    currencyNameAr: 'فرنك سويسري',
+    rateToAED: 4.12,
+  },
+  CNY: {
+    currencyCode: 'CNY',
+    currencyNameEn: 'Chinese Yuan',
+    currencyNameAr: 'يوان صيني',
+    rateToAED: 0.512,
+  },
+  JPY: {
+    currencyCode: 'JPY',
+    currencyNameEn: 'Japanese Yen',
+    currencyNameAr: 'ين ياباني',
+    rateToAED: 0.0245,
+  },
 };
 
 export class CbUaeRatesService {

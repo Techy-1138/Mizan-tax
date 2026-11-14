@@ -20,7 +20,9 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { AppPreferences } from '../../src/utils/preferences';
+import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { AnimatedFinancialNumber } from '../../src/animations';
@@ -199,6 +201,9 @@ export default function TaxHealthAuditReportScreen() {
   const router = useRouter();
   const { isRTL } = useLocale();
   const { activeBusiness } = useBusiness();
+  // Resolve theme palette dynamically so audit charts, badges, and cards adapt in dark mode
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const [currentView, setCurrentView] = useState<AuditView>('dashboard');
   const [activeTab, setActiveTab] = useState<DashboardTab>('Overview');
@@ -226,7 +231,7 @@ export default function TaxHealthAuditReportScreen() {
   }, [loadTasks]);
 
   const toggleTaskCompletion = async (taskId: string) => {
-    Haptics.selectionAsync().catch(() => {});
+    AppPreferences.selection();
     const updated = actionTasks.map((t) =>
       t.id === taskId ? { ...t, completed: !t.completed } : t
     );
@@ -235,7 +240,7 @@ export default function TaxHealthAuditReportScreen() {
   };
 
   const handleAddFindingToTasks = async (finding: AuditFindingItem) => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
     const exists = actionTasks.some((t) => t.title.includes(finding.title));
     if (!exists) {
       const newTask: ActionPlanTask = {
@@ -257,7 +262,7 @@ export default function TaxHealthAuditReportScreen() {
   };
 
   const handleOpenFinding = (finding: AuditFindingItem) => {
-    Haptics.selectionAsync().catch(() => {});
+    AppPreferences.selection();
     setSelectedFinding(finding);
     setCurrentView('finding-details');
   };
@@ -266,7 +271,7 @@ export default function TaxHealthAuditReportScreen() {
     const reportType = typeof reportTypeArg === 'string' ? reportTypeArg : 'TAX_READINESS_AUDIT';
     setIsExporting(true);
     try {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
       let htmlContent = '';
 
       if (activeBusiness?.id) {
@@ -389,7 +394,7 @@ export default function TaxHealthAuditReportScreen() {
 
             <View style={styles.featureCard}>
               <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: '#FFF3ED' }]}>
+                <View style={[styles.featureIconBox, { backgroundColor: colors.brand.primaryMuted }]}>
                   <Ionicons name="shield-checkmark-outline" size={20} color={colors.brand.primary} />
                 </View>
                 <View style={styles.featureTextCol}>
@@ -400,8 +405,8 @@ export default function TaxHealthAuditReportScreen() {
               <View style={styles.itemDivider} />
 
               <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: '#FEF3C7' }]}>
-                  <Ionicons name="layers-outline" size={20} color="#D97706" />
+                <View style={[styles.featureIconBox, { backgroundColor: colors.semantic.warningBg }]}>
+                  <Ionicons name="layers-outline" size={20} color={colors.semantic.warning} />
                 </View>
                 <View style={styles.featureTextCol}>
                   <Text style={styles.featureTitle}>Find Gaps & Risks</Text>
@@ -411,8 +416,8 @@ export default function TaxHealthAuditReportScreen() {
               <View style={styles.itemDivider} />
 
               <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: '#EFF6FF' }]}>
-                  <Ionicons name="flash-outline" size={20} color="#2563EB" />
+                <View style={[styles.featureIconBox, { backgroundColor: colors.semantic.infoBg }]}>
+                  <Ionicons name="flash-outline" size={20} color={colors.semantic.info} />
                 </View>
                 <View style={styles.featureTextCol}>
                   <Text style={styles.featureTitle}>Get an Action Plan</Text>
@@ -466,7 +471,7 @@ export default function TaxHealthAuditReportScreen() {
                     key={tab}
                     style={[styles.segmentPill, isSelected && styles.segmentPillActive]}
                     onPress={() => {
-                      Haptics.selectionAsync().catch(() => {});
+                      AppPreferences.selection();
                       setActiveTab(tab);
                     }}
                     activeOpacity={0.8}
@@ -518,7 +523,7 @@ export default function TaxHealthAuditReportScreen() {
                   >
                     <Ionicons name="checkmark-circle" size={16} color={colors.semantic.success} />
                     <Text style={styles.pillarLabel}>Corporate Tax</Text>
-                    <Text style={[styles.pillarStatus, { color: colors.semantic.successDark }]}>Compliant</Text>
+                    <Text style={[styles.pillarStatus, { color: colors.semantic.successText }]}>Compliant</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
@@ -527,7 +532,7 @@ export default function TaxHealthAuditReportScreen() {
                   >
                     <Ionicons name="alert-circle" size={16} color={colors.semantic.warning} />
                     <Text style={styles.pillarLabel}>VAT (201)</Text>
-                    <Text style={[styles.pillarStatus, { color: '#D97706' }]}>Needs Action</Text>
+                    <Text style={[styles.pillarStatus, { color: colors.semantic.warningText }]}>Needs Action</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
@@ -536,7 +541,7 @@ export default function TaxHealthAuditReportScreen() {
                   >
                     <Ionicons name="checkmark-circle" size={16} color={colors.semantic.success} />
                     <Text style={styles.pillarLabel}>SBR</Text>
-                    <Text style={[styles.pillarStatus, { color: colors.semantic.successDark }]}>Eligible</Text>
+                    <Text style={[styles.pillarStatus, { color: colors.semantic.successText }]}>Eligible</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
@@ -545,7 +550,7 @@ export default function TaxHealthAuditReportScreen() {
                   >
                     <Ionicons name="checkmark-circle" size={16} color={colors.semantic.success} />
                     <Text style={styles.pillarLabel}>Bookkeeping</Text>
-                    <Text style={[styles.pillarStatus, { color: colors.semantic.successDark }]}>Active</Text>
+                    <Text style={[styles.pillarStatus, { color: colors.semantic.successText }]}>Active</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -612,14 +617,14 @@ export default function TaxHealthAuditReportScreen() {
                             styles.issueIconBox,
                             {
                               backgroundColor:
-                                item.severity === 'HIGH_RISK' ? '#FEE2E2' : '#FEF3C7',
+                                item.severity === 'HIGH_RISK' ? colors.semantic.riskBg : colors.semantic.warningBg,
                             },
                           ]}
                         >
                           <Ionicons
                             name={item.severity === 'HIGH_RISK' ? 'warning' : 'warning-outline'}
                             size={18}
-                            color={item.severity === 'HIGH_RISK' ? colors.semantic.risk : '#D97706'}
+                            color={item.severity === 'HIGH_RISK' ? colors.semantic.risk : colors.semantic.warning}
                           />
                         </View>
                         <View style={styles.issueTextCol}>
@@ -666,10 +671,10 @@ export default function TaxHealthAuditReportScreen() {
                           {
                             backgroundColor:
                               item.severity === 'HIGH_RISK'
-                                ? '#FEE2E2'
+                                ? colors.semantic.riskBg
                                 : item.severity === 'WARNING'
-                                ? '#FEF3C7'
-                                : '#ECFDF5',
+                                ? colors.semantic.warningBg
+                                : colors.semantic.successBg,
                           },
                         ]}
                       >
@@ -686,8 +691,8 @@ export default function TaxHealthAuditReportScreen() {
                             item.severity === 'HIGH_RISK'
                               ? colors.semantic.risk
                               : item.severity === 'WARNING'
-                              ? '#D97706'
-                              : colors.semantic.successDark
+                              ? colors.semantic.warning
+                              : colors.semantic.success
                           }
                         />
                       </View>
@@ -813,8 +818,8 @@ export default function TaxHealthAuditReportScreen() {
               style={[
                 styles.highRiskBanner,
                 selectedFinding.severity === 'COMPLIANT' && {
-                  backgroundColor: '#ECFDF5',
-                  borderColor: '#A7F3D0',
+                  backgroundColor: colors.semantic.successBg,
+                  borderColor: colors.semantic.successBorder,
                 },
               ]}
             >
@@ -827,7 +832,7 @@ export default function TaxHealthAuditReportScreen() {
                     size={24}
                     color={
                       selectedFinding.severity === 'COMPLIANT'
-                        ? colors.semantic.successDark
+                        ? colors.semantic.success
                         : colors.semantic.risk
                     }
                   />
@@ -839,8 +844,8 @@ export default function TaxHealthAuditReportScreen() {
                       style={[
                         styles.riskBadge,
                         selectedFinding.severity === 'COMPLIANT' && {
-                          backgroundColor: '#D1FAE5',
-                          borderColor: '#6EE7B7',
+                          backgroundColor: colors.semantic.successBg,
+                          borderColor: colors.semantic.successBorder,
                         },
                       ]}
                     >
@@ -848,7 +853,7 @@ export default function TaxHealthAuditReportScreen() {
                         style={[
                           styles.riskBadgeText,
                           selectedFinding.severity === 'COMPLIANT' && {
-                            color: colors.semantic.successDark,
+                            color: colors.semantic.successText,
                           },
                         ]}
                       >
@@ -859,7 +864,7 @@ export default function TaxHealthAuditReportScreen() {
                   <Text
                     style={[
                       styles.riskSubtitle,
-                      selectedFinding.severity === 'COMPLIANT' && { color: '#065F46' },
+                      selectedFinding.severity === 'COMPLIANT' && { color: colors.semantic.successText },
                     ]}
                   >
                     {selectedFinding.subtitle}
@@ -953,7 +958,8 @@ export default function TaxHealthAuditReportScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+// Theme-aware styles factory for audit dashboard, risk matrix, and finding details
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -1070,7 +1076,7 @@ const styles = StyleSheet.create({
     ...shadows.pillButton,
   },
   primaryActionText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 15,
     fontWeight: '800',
   },
@@ -1081,6 +1087,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.brand.darkHero,
+    borderWidth: 1,
+    borderColor: colors.brand.darkHeroBorder,
     borderRadius: radii.xl,
     padding: spacing.md,
     ...shadows.cardHover,
@@ -1131,7 +1139,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textSecondary,
   },
   segmentPillTextActive: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
   },
   scoreBannerCard: {
     flexDirection: 'row',
@@ -1183,7 +1191,7 @@ const styles = StyleSheet.create({
   goodPillText: {
     fontSize: 10,
     fontWeight: '700',
-    color: colors.semantic.successDark,
+    color: colors.semantic.successText,
   },
   scoreDesc: {
     fontSize: 12,
@@ -1286,11 +1294,11 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   highRiskBanner: {
-    backgroundColor: '#FFF1F2',
+    backgroundColor: colors.semantic.riskBg,
     borderRadius: radii.xl,
     padding: spacing.md,
     borderWidth: 1,
-    borderColor: '#FECDD3',
+    borderColor: colors.semantic.riskBorder,
   },
   riskHeaderRow: {
     flexDirection: 'row',
@@ -1331,7 +1339,7 @@ const styles = StyleSheet.create({
   },
   riskSubtitle: {
     fontSize: 12,
-    color: '#9F1239',
+    color: colors.semantic.riskText,
     lineHeight: 16,
   },
   detailRow: {
@@ -1380,7 +1388,7 @@ const styles = StyleSheet.create({
     marginRight: 10,
   },
   stepNumText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 12,
     fontWeight: '800',
   },

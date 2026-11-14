@@ -23,7 +23,9 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { AppPreferences } from '../../src/utils/preferences';
+import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { MizanApi } from '../../src/services/api';
@@ -47,6 +49,9 @@ export default function NewInvoiceScreen() {
   const params = useLocalSearchParams<{ docType?: string; refInvoice?: string }>();
   const { isRTL } = useLocale();
   const { activeBusiness } = useBusiness();
+  // Resolve reactive theme colors & styles (PDF export HTML stays white-paper)
+  const { colors, isDark } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const docType = params.docType || 'TAX_INVOICE';
   const docTitle =
@@ -165,7 +170,7 @@ export default function NewInvoiceScreen() {
     }
 
     setIsSubmitting(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
 
     try {
       const res = await MizanApi.createDraftInvoice(buildPayload());
@@ -187,7 +192,7 @@ export default function NewInvoiceScreen() {
     }
 
     setIsSubmitting(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
       // 1. Create Draft
@@ -198,7 +203,7 @@ export default function NewInvoiceScreen() {
       const issued = await MizanApi.issueInvoice(draft.id);
       setInvoiceNo(issued.invoiceNumber);
 
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
       Alert.alert(
         'Tax Invoice Issued',
         `Invoice ${issued.invoiceNumber} has been officially issued under Article 59 of UAE VAT Executive Regulations.`,
@@ -214,7 +219,7 @@ export default function NewInvoiceScreen() {
         ]
       );
     } catch (err: any) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Issuance Failed', err?.message || 'Invoice compliance validation failed.');
     } finally {
       setIsSubmitting(false);
@@ -222,7 +227,7 @@ export default function NewInvoiceScreen() {
   };
 
   const handleDownloadPdf = async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
     try {
       let htmlContent = '';
       if (persistedInvoiceId) {
@@ -366,7 +371,7 @@ export default function NewInvoiceScreen() {
         {/* Registration status banner if non-registered */}
         {!isSupplierVatRegistered && (
           <View style={styles.unregisteredNotice}>
-            <Ionicons name="information-circle-outline" size={18} color="#D97706" />
+            <Ionicons name="information-circle-outline" size={18} color={colors.semantic.warning} />
             <Text style={styles.unregisteredNoticeText}>
               Your business is not registered for UAE VAT. Under Article 59, this invoice will be issued as a Commercial Invoice with 0% VAT.
             </Text>
@@ -465,18 +470,33 @@ export default function NewInvoiceScreen() {
                 value={customerName}
                 onChangeText={setCustomerName}
                 placeholder="e.g. Al Noor Trading LLC"
+                placeholderTextColor={colors.neutral.textTertiary}
+                keyboardAppearance={isDark ? 'dark' : 'light'}
               />
             </View>
 
             {/* Customer TRN */}
             <View style={styles.inputGroup}>
-              <Text style={styles.fieldLabel}>Customer 15-Digit TRN (Optional for B2C)</Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={styles.fieldLabel}>Customer 15-Digit TRN (Optional for B2C)</Text>
+                {customerTrn.trim().length === 15 && customerTrn.trim().startsWith('100') ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Ionicons name="checkmark-circle" size={13} color={colors.semantic.success} />
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: colors.semantic.success }}>Valid TRN</Text>
+                  </View>
+                ) : customerTrn.trim().length > 0 ? (
+                  <Text style={{ fontSize: 11, color: colors.semantic.warning, fontWeight: '600' }}>15-digits starting with 100</Text>
+                ) : null}
+              </View>
               <TextInput
                 style={styles.textInputBox}
                 value={customerTrn}
                 onChangeText={setCustomerTrn}
                 placeholder="100XXXXXXXXXXXX"
+                placeholderTextColor={colors.neutral.textTertiary}
+                keyboardAppearance={isDark ? 'dark' : 'light'}
                 keyboardType="numeric"
+                maxLength={15}
               />
             </View>
 
@@ -488,6 +508,8 @@ export default function NewInvoiceScreen() {
                 value={customerAddress}
                 onChangeText={setCustomerAddress}
                 placeholder="Downtown Dubai, Boulevard Plaza"
+                placeholderTextColor={colors.neutral.textTertiary}
+                keyboardAppearance={isDark ? 'dark' : 'light'}
               />
             </View>
 
@@ -499,6 +521,8 @@ export default function NewInvoiceScreen() {
                   style={styles.textInputBox}
                   value={invoiceDate}
                   onChangeText={setInvoiceDate}
+                  placeholderTextColor={colors.neutral.textTertiary}
+                  keyboardAppearance={isDark ? 'dark' : 'light'}
                 />
               </View>
               <View style={{ flex: 1 }}>
@@ -507,6 +531,8 @@ export default function NewInvoiceScreen() {
                   style={styles.textInputBox}
                   value={dueDate}
                   onChangeText={setDueDate}
+                  placeholderTextColor={colors.neutral.textTertiary}
+                  keyboardAppearance={isDark ? 'dark' : 'light'}
                 />
               </View>
             </View>
@@ -546,7 +572,7 @@ export default function NewInvoiceScreen() {
                   {items.length > 1 && (
                     <TouchableOpacity
                       onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
                         setItems(items.filter((x) => x.id !== itm.id));
                       }}
                     >
@@ -560,6 +586,8 @@ export default function NewInvoiceScreen() {
                   <TextInput
                     style={styles.textInputBox}
                     value={itm.description}
+                    placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                     onChangeText={(val) => {
                       const next = [...items];
                       next[idx].description = val;
@@ -574,6 +602,8 @@ export default function NewInvoiceScreen() {
                     <TextInput
                       style={styles.textInputBox}
                       keyboardType="numeric"
+                      placeholderTextColor={colors.neutral.textTertiary}
+                      keyboardAppearance={isDark ? 'dark' : 'light'}
                       value={String(itm.quantity)}
                       onChangeText={(val) => {
                         const next = [...items];
@@ -587,6 +617,8 @@ export default function NewInvoiceScreen() {
                     <TextInput
                       style={styles.textInputBox}
                       keyboardType="numeric"
+                      placeholderTextColor={colors.neutral.textTertiary}
+                      keyboardAppearance={isDark ? 'dark' : 'light'}
                       value={String(itm.unitPrice)}
                       onChangeText={(val) => {
                         const next = [...items];
@@ -634,6 +666,49 @@ export default function NewInvoiceScreen() {
                 )}
               </Animated.View>
             ))}
+
+            {/* Quick Item Presets for Manual Invoicing */}
+            <Text style={{ fontSize: 12, fontWeight: '700', color: colors.neutral.textSecondary, marginTop: 4, marginBottom: 8 }}>
+              Quick Templates
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 10 }}>
+              {[
+                { label: '+ Management Consulting', desc: 'Professional Advisory Services', price: 5000, vat: 'STANDARD_5' as const },
+                { label: '+ Software & Cloud Hosting', desc: 'SaaS Platform License Fee', price: 1500, vat: 'STANDARD_5' as const },
+                { label: '+ Legal & Statutory Filing', desc: 'EmaraTax Corporate Compliance', price: 3500, vat: 'STANDARD_5' as const },
+                { label: '+ Export / 0% VAT Supply', desc: 'Cross-border International Supply', price: 4000, vat: 'ZERO_RATED_0' as const },
+              ].map((preset, pIdx) => (
+                <TouchableOpacity
+                  key={pIdx}
+                  style={{
+                    backgroundColor: colors.neutral.surface,
+                    borderWidth: 1,
+                    borderColor: colors.neutral.border,
+                    borderRadius: radii.sm,
+                    paddingHorizontal: 12,
+                    paddingVertical: 7,
+                  }}
+                  onPress={() => {
+                    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
+                    setItems([
+                      ...items,
+                      {
+                        id: String(Date.now() + pIdx),
+                        description: preset.desc,
+                        quantity: 1,
+                        unitPrice: preset.price,
+                        discount: 0,
+                        vatTreatment: preset.vat,
+                      },
+                    ]);
+                  }}
+                >
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: colors.brand.primary }}>
+                    {preset.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
 
             <TouchableOpacity
               style={styles.addItemBtn}
@@ -784,7 +859,7 @@ export default function NewInvoiceScreen() {
               activeOpacity={0.88}
             >
               {isSubmitting ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
+                <ActivityIndicator color={colors.neutral.onPrimary} size="small" />
               ) : (
                 <Text style={styles.primaryActionText}>Issue Tax Invoice (Article 59) →</Text>
               )}
@@ -805,11 +880,11 @@ export default function NewInvoiceScreen() {
 
             <View style={styles.pdfBottomBar}>
               <TouchableOpacity style={styles.pdfActionBtn} onPress={handleDownloadPdf}>
-                <Ionicons name="download-outline" size={18} color="#FFFFFF" />
+                <Ionicons name="download-outline" size={18} color={colors.neutral.onPrimary} />
                 <Text style={styles.pdfActionBtnText}>Download</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.pdfActionBtn} onPress={handleDownloadPdf}>
-                <Ionicons name="share-outline" size={18} color="#FFFFFF" />
+                <Ionicons name="share-outline" size={18} color={colors.neutral.onPrimary} />
                 <Text style={styles.pdfActionBtnText}>Share</Text>
               </TouchableOpacity>
             </View>
@@ -822,7 +897,8 @@ export default function NewInvoiceScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic theme-aware stylesheet factory for NewInvoiceScreen
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -886,17 +962,17 @@ const styles = StyleSheet.create({
   unregisteredNotice: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FEF3C7',
+    backgroundColor: colors.semantic.warningBg,
     padding: spacing.md,
     borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#FCD34D',
+    borderColor: colors.semantic.warningBorder,
     marginBottom: spacing.md,
     gap: 8,
   },
   unregisteredNoticeText: {
     fontSize: 11,
-    color: '#92400E',
+    color: colors.semantic.warningText,
     flex: 1,
     lineHeight: 15,
   },
@@ -929,7 +1005,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.neutral.border,
   },
   stepNumText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 12,
     fontWeight: '700',
   },
@@ -1048,7 +1124,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textSecondary,
   },
   vatPillTextActive: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
   },
   addItemBtn: {
     flexDirection: 'row',
@@ -1076,7 +1152,7 @@ const styles = StyleSheet.create({
     ...shadows.pillButton,
   },
   primaryActionText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 15,
     fontWeight: '800',
   },
@@ -1121,7 +1197,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textSecondary,
   },
   buyerContainer: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: colors.neutral.surfaceSubdued,
     padding: spacing.sm,
     borderRadius: radii.md,
   },
@@ -1266,7 +1342,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   pdfActionBtnText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 13,
     fontWeight: '700',
   },

@@ -13,17 +13,19 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
-  Modal,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from '../../src/components/SafeAreaView';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { AppPreferences } from '../../src/utils/preferences';
+import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { MizanApi } from '../../src/services/api';
-import { AnimatedCheckbox } from '../../src/animations';
+import { SmoothModal } from '../../src/animations';
+import { AnimatedCheckbox, AnimatedSwitch } from '../../src/animations';
 
 type ReviewView = 'hub' | 'single' | 'batch';
 
@@ -31,6 +33,9 @@ export default function ExpenseReviewScreen() {
   const router = useRouter();
   const { isRTL } = useLocale();
   const { activeBusiness } = useBusiness();
+  // Resolve theme palette & dynamic styles for Light/Dark reactivity
+  const { colors, isDark } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const [currentView, setCurrentView] = useState<ReviewView>('hub');
   const [isLoading, setIsLoading] = useState(true);
@@ -52,6 +57,7 @@ export default function ExpenseReviewScreen() {
   const [editCategoryName, setEditCategoryName] = useState('Office Supplies');
   const [editAmount, setEditAmount] = useState(0);
   const [editNotes, setEditNotes] = useState('');
+  const [isEntertainmentSplit, setIsEntertainmentSplit] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
 
   // Batch selection set
@@ -101,6 +107,13 @@ export default function ExpenseReviewScreen() {
     setEditCategoryName(exp.categoryNameEn || 'Office Supplies');
     setEditAmount(exp.totalAmount || 0);
     setEditNotes(exp.notes || '');
+
+    const isEnt =
+      exp.isEntertainmentSplit ||
+      exp.category === 'ENTERTAINMENT' ||
+      exp.category === 'MEALS_ENTERTAINMENT' ||
+      (exp.supplierName && /cafe|coffee|restaurant|dining|starbucks|costa|bistro|deliveroo|talabat/i.test(exp.supplierName));
+    setIsEntertainmentSplit(Boolean(isEnt));
   };
 
   const handleOpenSingle = (exp: any, idx: number) => {
@@ -134,15 +147,18 @@ export default function ExpenseReviewScreen() {
         supplierTrn: editTrn.trim() || undefined,
         receiptNumber: editReceiptNo.trim() || undefined,
         expenseDate: editDate,
-        category: editCategory,
+        category: isEntertainmentSplit ? 'MEALS_ENTERTAINMENT' : editCategory,
         totalAmount: editAmount,
-        notes: editNotes.trim() || undefined,
+        notes: isEntertainmentSplit
+          ? `${editNotes.trim() ? editNotes.trim() + ' | ' : ''}Article 32 Entertainment 50% split applied`
+          : editNotes.trim() || undefined,
+        isEntertainmentSplit,
       });
 
       // Then approve
       await MizanApi.approveExpense(selectedExpense.id);
 
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
       Alert.alert('Expense Approved', `${editMerchant} (AED ${editAmount.toFixed(2)}) approved and added to your ledger.`);
 
       await fetchExpensesAndSummaries();
@@ -169,7 +185,7 @@ export default function ExpenseReviewScreen() {
     setIsActionLoading(true);
     try {
       await MizanApi.rejectExpense(selectedExpense.id, editNotes || 'User rejected during review');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Warning);
       Alert.alert('Expense Rejected', `${editMerchant} marked as rejected.`);
       await fetchExpensesAndSummaries();
       setCurrentView('hub');
@@ -189,7 +205,7 @@ export default function ExpenseReviewScreen() {
         expenseIds: selectedIds,
         action: 'APPROVE',
       });
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
       Alert.alert('Batch Approved', `${selectedIds.length} expenses approved and posted to the business ledger.`);
       await fetchExpensesAndSummaries();
       setCurrentView('hub');
@@ -209,7 +225,7 @@ export default function ExpenseReviewScreen() {
         action: 'REJECT',
         reason: 'Batch rejected by user',
       });
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Warning);
       Alert.alert('Batch Rejected', `${selectedIds.length} expenses marked as rejected.`);
       await fetchExpensesAndSummaries();
       setCurrentView('hub');
@@ -361,7 +377,7 @@ export default function ExpenseReviewScreen() {
                     style={styles.scanCtaBtn}
                     onPress={() => router.push('/expenses/scan')}
                   >
-                    <Ionicons name="camera-outline" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+                    <Ionicons name="camera-outline" size={16} color={colors.neutral.onPrimary} style={{ marginRight: 6 }} />
                     <Text style={styles.scanCtaText}>Scan New Receipt</Text>
                   </TouchableOpacity>
                 </View>
@@ -400,7 +416,7 @@ export default function ExpenseReviewScreen() {
                   onPress={() => handleOpenSingle(pendingExpenses[0], 0)}
                   activeOpacity={0.88}
                 >
-                  <Ionicons name="sparkles" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                  <Ionicons name="sparkles" size={18} color={colors.neutral.onPrimary} style={{ marginRight: 6 }} />
                   <Text style={styles.primaryActionText}>
                     Review & Categorize ({pendingExpenses.length}) →
                   </Text>
@@ -441,6 +457,8 @@ export default function ExpenseReviewScreen() {
                     value={editMerchant}
                     onChangeText={setEditMerchant}
                     placeholder="Merchant name"
+                    placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 </View>
                 <View style={styles.itemDivider} />
@@ -453,6 +471,8 @@ export default function ExpenseReviewScreen() {
                     value={editTrn}
                     onChangeText={setEditTrn}
                     placeholder="100XXXXXXXXXXXX"
+                    placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                     keyboardType="number-pad"
                   />
                 </View>
@@ -466,6 +486,8 @@ export default function ExpenseReviewScreen() {
                     value={editDate}
                     onChangeText={setEditDate}
                     placeholder="2026-10-15"
+                    placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 </View>
                 <View style={styles.itemDivider} />
@@ -478,6 +500,8 @@ export default function ExpenseReviewScreen() {
                     value={editReceiptNo}
                     onChangeText={setEditReceiptNo}
                     placeholder="INV-XXXXX"
+                    placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 </View>
                 <View style={styles.itemDivider} />
@@ -503,8 +527,62 @@ export default function ExpenseReviewScreen() {
                     style={[styles.formTextInput, { fontWeight: '800', color: colors.brand.primary, fontSize: 16 }]}
                     value={String(editAmount)}
                     onChangeText={(val) => setEditAmount(parseFloat(val) || 0)}
+                    placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                     keyboardType="numeric"
                   />
+                </View>
+                <View style={styles.itemDivider} />
+
+                {/* Article 32 Entertainment & Hospitality Smart-Split */}
+                <View style={styles.entertainmentCard}>
+                  <View style={styles.entertainmentHeader}>
+                    <View style={{ flex: 1, paddingRight: 8 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+                        <Ionicons name="restaurant-outline" size={16} color={colors.brand.primary} style={{ marginRight: 6 }} />
+                        <Text style={styles.entertainmentTitle}>Article 32 Entertainment Split</Text>
+                      </View>
+                      <Text style={styles.entertainmentSubtitle}>
+                        50% CT deduction limit & 100% blocked VAT recovery
+                      </Text>
+                    </View>
+                    <AnimatedSwitch
+                      value={isEntertainmentSplit}
+                      onValueChange={(val) => {
+                        setIsEntertainmentSplit(val);
+                        if (val && editCategory !== 'MEALS_ENTERTAINMENT') {
+                          setEditCategory('MEALS_ENTERTAINMENT');
+                          setEditCategoryName('Meals & Entertainment');
+                        }
+                      }}
+                    />
+                  </View>
+
+                  {isEntertainmentSplit && (
+                    <View style={styles.entertainmentBreakdown}>
+                      <View style={styles.splitRow}>
+                        <Text style={styles.splitLabel}>Corporate Tax Deductible (50%):</Text>
+                        <Text style={[styles.splitValue, { color: colors.semantic.success }]}>
+                          AED {(editAmount * 0.5).toFixed(2)}
+                        </Text>
+                      </View>
+                      <View style={styles.splitRow}>
+                        <Text style={styles.splitLabel}>Corporate Tax Add-Back (50%):</Text>
+                        <Text style={[styles.splitValue, { color: colors.semantic.risk }]}>
+                          AED {(editAmount * 0.5).toFixed(2)}
+                        </Text>
+                      </View>
+                      <View style={styles.splitRow}>
+                        <Text style={styles.splitLabel}>Input VAT Recovery (Art. 53):</Text>
+                        <Text style={[styles.splitValue, { color: colors.semantic.warning, fontWeight: '700' }]}>
+                          AED 0.00 (Blocked)
+                        </Text>
+                      </View>
+                      <Text style={styles.splitCitation}>
+                        Statutory Reference: Art. 32 Federal Decree-Law No. 47/2022 & Art. 53 Cabinet Decision No. 52/2017.
+                      </Text>
+                    </View>
+                  )}
                 </View>
                 <View style={styles.itemDivider} />
 
@@ -515,6 +593,7 @@ export default function ExpenseReviewScreen() {
                     style={styles.notesInput}
                     placeholder="Add audit notes or justification..."
                     placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                     value={editNotes}
                     onChangeText={setEditNotes}
                   />
@@ -539,7 +618,7 @@ export default function ExpenseReviewScreen() {
                   activeOpacity={0.88}
                 >
                   {isActionLoading ? (
-                    <ActivityIndicator color="#FFFFFF" />
+                    <ActivityIndicator color={colors.neutral.onPrimary} />
                   ) : (
                     <Text style={styles.approveBtnText}>Approve & Post to Ledger →</Text>
                   )}
@@ -620,7 +699,7 @@ export default function ExpenseReviewScreen() {
                   activeOpacity={0.88}
                 >
                   {isActionLoading ? (
-                    <ActivityIndicator color="#FFFFFF" />
+                    <ActivityIndicator color={colors.neutral.onPrimary} />
                   ) : (
                     <Text style={styles.batchCategorizeText}>
                       Approve Selected ({selectedIds.length})
@@ -645,45 +724,44 @@ export default function ExpenseReviewScreen() {
       )}
 
       {/* Category Selection Modal */}
-      <Modal visible={showCategoryModal} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select UAE Expense Category</Text>
-              <TouchableOpacity onPress={() => setShowCategoryModal(false)}>
-                <Ionicons name="close" size={24} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 400 }}>
-              {categories.map((cat) => (
-                <TouchableOpacity
-                  key={cat.code}
-                  style={[styles.categoryOption, editCategory === cat.code && styles.categoryOptionActive]}
-                  onPress={() => {
-                    setEditCategory(cat.code);
-                    setEditCategoryName(cat.nameEn);
-                    setShowCategoryModal(false);
-                  }}
-                >
-                  <Ionicons name={cat.icon || 'pricetag-outline'} size={18} color={colors.brand.primary} />
-                  <View style={{ marginLeft: 12, flex: 1 }}>
-                    <Text style={styles.catOptionName}>{cat.nameEn}</Text>
-                    <Text style={styles.catOptionDesc}>{cat.description}</Text>
-                  </View>
-                  {editCategory === cat.code && (
-                    <Ionicons name="checkmark" size={18} color={colors.brand.primary} />
-                  )}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+      <SmoothModal visible={showCategoryModal} onClose={() => setShowCategoryModal(false)} maxWidth={440}>
+        <View style={[styles.modalContent, { width: '100%', borderRadius: 0 }]}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Select UAE Expense Category</Text>
+            <TouchableOpacity onPress={() => setShowCategoryModal(false)}>
+              <Ionicons name="close" size={24} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
           </View>
+          <ScrollView style={{ maxHeight: 400 }}>
+            {categories.map((cat) => (
+              <TouchableOpacity
+                key={cat.code}
+                style={[styles.categoryOption, editCategory === cat.code && styles.categoryOptionActive]}
+                onPress={() => {
+                  setEditCategory(cat.code);
+                  setEditCategoryName(cat.nameEn);
+                  setShowCategoryModal(false);
+                }}
+              >
+                <Ionicons name={cat.icon || 'pricetag-outline'} size={18} color={colors.brand.primary} />
+                <View style={{ marginLeft: 12, flex: 1 }}>
+                  <Text style={styles.catOptionName}>{cat.nameEn}</Text>
+                  <Text style={styles.catOptionDesc}>{cat.description}</Text>
+                </View>
+                {editCategory === cat.code && (
+                  <Ionicons name="checkmark" size={18} color={colors.brand.primary} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
-      </Modal>
+      </SmoothModal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic theme-aware stylesheet factory for ExpenseReviewScreen
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -705,7 +783,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.neutral.border,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -739,7 +817,7 @@ const styles = StyleSheet.create({
     color: colors.brand.primary,
   },
   counterIndicator: {
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: radii.full,
@@ -783,7 +861,7 @@ const styles = StyleSheet.create({
   activeBizBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF8F4',
+    backgroundColor: colors.brand.blushSoft,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
@@ -804,7 +882,7 @@ const styles = StyleSheet.create({
   },
   metricCard: {
     width: '48%',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     borderRadius: radii.md,
     padding: spacing.sm,
     borderWidth: 1,
@@ -813,7 +891,7 @@ const styles = StyleSheet.create({
   },
   metricCardActive: {
     borderColor: colors.brand.primary,
-    backgroundColor: '#FFFDFC',
+    backgroundColor: colors.brand.blushSoft,
   },
   metricCardTitle: {
     fontSize: 11,
@@ -849,7 +927,7 @@ const styles = StyleSheet.create({
     color: colors.brand.primary,
   },
   expensesListCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     borderRadius: radii.lg,
     borderWidth: 1,
     borderColor: colors.neutral.border,
@@ -865,7 +943,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 8,
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
@@ -914,12 +992,12 @@ const styles = StyleSheet.create({
     ...shadows.sm,
   },
   primaryActionText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 15,
     fontWeight: '700',
   },
   emptyCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     borderRadius: radii.lg,
     padding: spacing.xl,
     alignItems: 'center',
@@ -949,13 +1027,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scanCtaText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 13,
     fontWeight: '700',
   },
   merchantHeaderCard: {
     flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     padding: spacing.md,
     borderRadius: radii.lg,
     alignItems: 'center',
@@ -968,7 +1046,7 @@ const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: radii.md,
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
@@ -995,7 +1073,7 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   formCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     borderRadius: radii.lg,
     padding: spacing.md,
     borderWidth: 1,
@@ -1045,7 +1123,7 @@ const styles = StyleSheet.create({
   },
   rejectBtn: {
     flex: 1,
-    backgroundColor: '#FEF2F2',
+    backgroundColor: colors.semantic.riskBg,
     borderWidth: 1,
     borderColor: colors.semantic.risk,
     paddingVertical: 14,
@@ -1054,7 +1132,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   rejectBtnText: {
-    color: colors.semantic.risk,
+    color: colors.semantic.riskText,
     fontSize: 14,
     fontWeight: '700',
   },
@@ -1068,14 +1146,16 @@ const styles = StyleSheet.create({
     ...shadows.sm,
   },
   approveBtnText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 14,
     fontWeight: '700',
   },
   batchHeroDarkCard: {
-    backgroundColor: '#0F172A',
+    backgroundColor: colors.brand.darkHero,
     borderRadius: radii.lg,
     padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.brand.darkHeroBorder,
     marginBottom: spacing.md,
   },
   batchHeroTopRow: {
@@ -1125,7 +1205,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.1)',
   },
   batchListCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     borderRadius: radii.lg,
     borderWidth: 1,
     borderColor: colors.neutral.border,
@@ -1180,13 +1260,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   batchCategorizeText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 14,
     fontWeight: '700',
   },
   batchMarkBtn: {
     flex: 1,
-    backgroundColor: '#FEF2F2',
+    backgroundColor: colors.semantic.riskBg,
     borderWidth: 1,
     borderColor: colors.semantic.risk,
     paddingVertical: 14,
@@ -1195,17 +1275,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   batchMarkText: {
-    color: colors.semantic.risk,
+    color: colors.semantic.riskText,
     fontSize: 14,
     fontWeight: '700',
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: colors.neutral.scrim,
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surfaceRaised,
     borderTopLeftRadius: radii.xl,
     borderTopRightRadius: radii.xl,
     padding: spacing.lg,
@@ -1229,7 +1309,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.neutral.border,
   },
   categoryOptionActive: {
-    backgroundColor: '#FFF8F4',
+    backgroundColor: colors.brand.blushSoft,
   },
   catOptionName: {
     fontSize: 14,
@@ -1240,5 +1320,54 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.neutral.textSecondary,
     marginTop: 2,
+  },
+  entertainmentCard: {
+    backgroundColor: colors.neutral.surfaceSubdued,
+    borderRadius: radii.md,
+    padding: spacing.md,
+    marginVertical: 4,
+    borderWidth: 1,
+    borderColor: colors.neutral.border,
+  },
+  entertainmentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  entertainmentTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.neutral.textPrimary,
+  },
+  entertainmentSubtitle: {
+    fontSize: 11,
+    color: colors.neutral.textSecondary,
+    marginTop: 2,
+  },
+  entertainmentBreakdown: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.neutral.border,
+  },
+  splitRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 3,
+  },
+  splitLabel: {
+    fontSize: 12,
+    color: colors.neutral.textSecondary,
+  },
+  splitValue: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  splitCitation: {
+    fontSize: 10,
+    color: colors.neutral.textTertiary,
+    marginTop: 6,
+    fontStyle: 'italic',
   },
 });

@@ -17,7 +17,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Linking,
-  Modal,
   ActivityIndicator,
   Share,
   Alert,
@@ -26,12 +25,14 @@ import { SafeAreaView } from '../../src/components/SafeAreaView';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { AppPreferences } from '../../src/utils/preferences';
+import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { MizanApi } from '../../src/services/api';
 import Animated, { FadeInUp } from 'react-native-reanimated';
-import { AnimatedTypingIndicator } from '../../src/animations';
+import { AnimatedTypingIndicator, SmoothModal } from '../../src/animations';
 
 type AIChatView = 'landing' | 'thread';
 type DetailTab = 'Answer' | 'Sources' | 'Related' | 'Citations';
@@ -63,6 +64,9 @@ export default function GroundedChatScreen() {
   const router = useRouter();
   const { isRTL } = useLocale();
   const { activeBusiness } = useBusiness();
+  // Resolve theme palette & dynamic styles for Light/Dark reactivity
+  const { colors, isDark } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const scrollViewRef = useRef<any>(null);
 
   const [viewState, setViewState] = useState<AIChatView>('landing');
@@ -121,93 +125,12 @@ export default function GroundedChatScreen() {
   }, [isRTL]);
 
   const handleSendMessage = async (textToSend?: string) => {
-    const text = (textToSend || inputText).trim();
-    if (!text || isTyping) return;
-
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
-    const userMsg: ChatMessage = {
-      id: String(Date.now()),
-      sender: 'user',
-      text,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setInputText('');
-    setViewState('thread');
-    setIsTyping(true);
-
-    setTimeout(() => {
-      scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-
-    try {
-      const isFreeZone =
-        activeBusiness?.jurisdictionType === 'FREE_ZONE' ||
-        (activeBusiness?.licensingAuthority &&
-          activeBusiness.licensingAuthority.toLowerCase().includes('free zone')) ||
-        false;
-
-      const context = activeBusiness
-        ? {
-            businessType: activeBusiness.legalEntityType,
-            annualRevenue: activeBusiness.annualRevenueEstimateAED,
-            isFreeZone,
-          }
-        : undefined;
-
-      const aiRes = await MizanApi.askAi(
-        text,
-        isRTL ? 'ar' : 'en',
-        context,
-        activeBusiness?.id
-      );
-
-      const mappedSources = (aiRes.citations || []).map((c) => ({
-        title: `${c.officialNumber} – ${c.title}`,
-        sub: c.article,
-        url: c.officialUrl || 'https://tax.gov.ae',
-      }));
-
-      const assistantMsg: ChatMessage = {
-        id: String(Date.now() + 1),
-        sender: 'assistant',
-        text: aiRes.answer,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        sources: mappedSources.length > 0 ? mappedSources : undefined,
-        statutoryRationale: aiRes.statutoryRationale,
-        actionRequired: aiRes.actionRequired,
-        emaraTaxImpact: aiRes.emaraTaxImpact,
-        suggestedFollowUps: aiRes.suggestedFollowUps,
-        isGrounded: aiRes.isGrounded,
-        businessGrounding: aiRes.businessGrounding,
-      };
-
-      setMessages((prev) => [...prev, assistantMsg]);
-      setSelectedMessage(assistantMsg);
-
-      if (aiRes.suggestedFollowUps && aiRes.suggestedFollowUps.length > 0) {
-        setFollowUpChips(aiRes.suggestedFollowUps);
-      }
-    } catch (err: any) {
-      console.warn('AI Tax Query Error:', err?.message || err);
-      const fallbackMsg: ChatMessage = {
-        id: String(Date.now() + 2),
-        sender: 'assistant',
-        text: isRTL
-          ? 'تعذر الاتصال بمركز الاستعلامات الضريبية مؤقتاً. يرجى التحقق من اتصال الإنترنت وإعادة المحاولة.'
-          : 'Unable to connect to the Mizan statutory intelligence engine. Please check your connection and try again.',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isGrounded: false,
-      };
-      setMessages((prev) => [...prev, fallbackMsg]);
-    } finally {
-      setIsTyping(false);
-      setTimeout(() => {
-        scrollViewRef.current?.scrollToEnd({ animated: true });
-      }, 100);
-    }
+    AppPreferences.notification(Haptics.NotificationFeedbackType.Warning);
+    Alert.alert(
+      'Mizan AI • Regulatory Preview',
+      'The Mizan AI Statutory Query engine is currently undergoing regulatory compliance verification with UAE tax authorities. Live querying is temporarily locked to guarantee manual-first accounting accuracy.\n\nPlease refer to our official interactive Academy micro-courses and deterministic filing companions.',
+      [{ text: 'Understood' }]
+    );
   };
 
   const handleSelectQuickPrompt = (prompt: string) => {
@@ -216,14 +139,14 @@ export default function GroundedChatScreen() {
 
   const openSourceUrl = (url?: string) => {
     if (!url) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
     Linking.openURL(url).catch((err) => {
       console.warn('Failed to open source URL:', err);
     });
   };
 
   const handleOpenAnswerDetails = (msg?: ChatMessage) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
     const target = msg || selectedMessage || messages.filter((m) => m.sender === 'assistant').slice(-1)[0];
     if (target) {
       setSelectedMessage(target);
@@ -290,7 +213,7 @@ export default function GroundedChatScreen() {
               style={styles.headerIconBtn}
               activeOpacity={0.7}
               onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
                 setViewState(viewState === 'landing' ? 'thread' : 'landing');
               }}
             >
@@ -300,6 +223,28 @@ export default function GroundedChatScreen() {
                 color={colors.neutral.textPrimary}
               />
             </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Regulatory Preview Notice Banner */}
+        <View style={{
+          backgroundColor: colors.brand.primaryMuted,
+          paddingHorizontal: spacing.lg,
+          paddingVertical: 10,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.brand.blushAlt,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 10,
+        }}>
+          <Ionicons name="time" size={18} color={colors.brand.primary} />
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ fontSize: 12, fontWeight: '800', color: colors.brand.primaryDark }}>COMING SOON • REGULATORY PREVIEW</Text>
+            </View>
+            <Text style={{ fontSize: 11, color: colors.neutral.textSecondary, marginTop: 1, lineHeight: 15 }}>
+              Real-time FTA query generation is temporarily locked for regulatory review. Manual filing & Academy modules remain fully active.
+            </Text>
           </View>
         </View>
 
@@ -328,7 +273,7 @@ export default function GroundedChatScreen() {
             {/* 3 Capabilities Badges Card */}
             <View style={styles.featureCard}>
               <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: '#FFF3ED' }]}>
+                <View style={[styles.featureIconBox, { backgroundColor: colors.brand.primaryMuted }]}>
                   <Ionicons name="shield-checkmark-outline" size={20} color={colors.brand.primary} />
                 </View>
                 <View style={styles.featureTextCol}>
@@ -341,8 +286,8 @@ export default function GroundedChatScreen() {
               <View style={styles.itemDivider} />
 
               <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: '#EFF6FF' }]}>
-                  <Ionicons name="flash-outline" size={20} color="#2563EB" />
+                <View style={[styles.featureIconBox, { backgroundColor: colors.semantic.infoBg }]}>
+                  <Ionicons name="flash-outline" size={20} color={colors.semantic.info} />
                 </View>
                 <View style={styles.featureTextCol}>
                   <Text style={styles.featureTitle}>Business-Aware Compliance</Text>
@@ -354,7 +299,7 @@ export default function GroundedChatScreen() {
               <View style={styles.itemDivider} />
 
               <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: '#F0FDF4' }]}>
+                <View style={[styles.featureIconBox, { backgroundColor: colors.semantic.successBg }]}>
                   <Ionicons name="document-text-outline" size={20} color={colors.semantic.successDark} />
                 </View>
                 <View style={styles.featureTextCol}>
@@ -371,11 +316,11 @@ export default function GroundedChatScreen() {
             <View style={styles.topicsGrid}>
               {[
                 { label: 'Small Business Relief', icon: 'shield-outline', color: colors.brand.primary, prompt: 'Is my business eligible for Small Business Relief (AED 3M)?' },
-                { label: 'Hotel & Travel VAT', icon: 'airplane-outline', color: '#0284C7', prompt: 'Can I claim VAT back on employee hotels & travel under Decision 17?' },
-                { label: 'Client Entertainment', icon: 'restaurant-outline', color: '#D97706', prompt: 'How are client entertainment and dining expenses treated under Art. 53?' },
-                { label: 'Freelancers & Individuals', icon: 'person-outline', color: '#059669', prompt: 'I am a freelancer/sole proprietor, what is my Corporate Tax threshold?' },
-                { label: 'CT Late Penalties', icon: 'alert-circle-outline', color: '#DC2626', prompt: 'What are the Corporate Tax registration deadlines and late penalties?' },
-                { label: 'Peppol E-Invoicing', icon: 'receipt-outline', color: '#7C3AED', prompt: 'What are the UAE mandatory E-Invoicing (Peppol PINT) requirements?' },
+                { label: 'Hotel & Travel VAT', icon: 'airplane-outline', color: colors.semantic.info, prompt: 'Can I claim VAT back on employee hotels & travel under Decision 17?' },
+                { label: 'Client Entertainment', icon: 'restaurant-outline', color: colors.semantic.warning, prompt: 'How are client entertainment and dining expenses treated under Art. 53?' },
+                { label: 'Freelancers & Individuals', icon: 'person-outline', color: colors.semantic.success, prompt: 'I am a freelancer/sole proprietor, what is my Corporate Tax threshold?' },
+                { label: 'CT Late Penalties', icon: 'alert-circle-outline', color: colors.semantic.risk, prompt: 'What are the Corporate Tax registration deadlines and late penalties?' },
+                { label: 'Peppol E-Invoicing', icon: 'receipt-outline', color: isDark ? '#A78BFA' : '#7C3AED', prompt: 'What are the UAE mandatory E-Invoicing (Peppol PINT) requirements?' },
               ].map((topic) => (
                 <TouchableOpacity
                   key={topic.label}
@@ -395,7 +340,7 @@ export default function GroundedChatScreen() {
               onPress={() => setViewState('thread')}
               activeOpacity={0.88}
             >
-              <Ionicons name="chatbubble-ellipses-outline" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+              <Ionicons name="chatbubble-ellipses-outline" size={20} color={colors.neutral.onPrimary} style={{ marginRight: 8 }} />
               <Text style={styles.primaryActionText}>Open Mizan AI Assistant →</Text>
             </TouchableOpacity>
 
@@ -480,7 +425,7 @@ export default function GroundedChatScreen() {
                           <TouchableOpacity
                             style={styles.actionIconBtn}
                             onPress={() => {
-                              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+                              AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
                               const citeText = msg.sources?.map((s) => `• ${s.title}`).join('\n') || '';
                               Alert.alert(
                                 'Legal Summary Ready',
@@ -503,7 +448,7 @@ export default function GroundedChatScreen() {
                           <TouchableOpacity
                             style={styles.actionIconBtn}
                             onPress={() => {
-                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                              AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
                               const citeText = msg.sources?.map((s) => `• ${s.title}`).join('\n') || '';
                               Share.share({
                                 message: `Mizan Tax AI Consultation:\n\n${msg.text}\n\n${citeText}`,
@@ -572,6 +517,7 @@ export default function GroundedChatScreen() {
                 style={styles.chatInput}
                 placeholder={isRTL ? 'اطرح سؤالاً ضريبياً...' : 'Ask a UAE tax question...'}
                 placeholderTextColor={colors.neutral.textTertiary}
+                keyboardAppearance={isDark ? 'dark' : 'light'}
                 value={inputText}
                 onChangeText={setInputText}
                 onSubmitEditing={() => handleSendMessage()}
@@ -584,9 +530,9 @@ export default function GroundedChatScreen() {
                 activeOpacity={0.85}
               >
                 {isTyping ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <ActivityIndicator size="small" color={colors.neutral.onPrimary} />
                 ) : (
-                  <Ionicons name="send" size={16} color="#FFFFFF" />
+                  <Ionicons name="send" size={16} color={colors.neutral.onPrimary} />
                 )}
               </TouchableOpacity>
             </View>
@@ -596,13 +542,12 @@ export default function GroundedChatScreen() {
         {/* ==================================================================== */}
         {/* VIEW 3: ANSWER DETAILS MODAL SHEET (4129.png Screen 3)               */}
         {/* ==================================================================== */}
-        <Modal
+        <SmoothModal
           visible={showAnswerDetails}
-          animationType="slide"
-          presentationStyle="pageSheet"
-          onRequestClose={() => setShowAnswerDetails(false)}
+          onClose={() => setShowAnswerDetails(false)}
+          maxWidth={500}
         >
-          <View style={styles.modalContainer}>
+          <View style={[styles.modalContainer, { maxHeight: 600 }]}>
             {/* Modal Header */}
             <View style={styles.modalHeaderRow}>
               <View>
@@ -623,7 +568,7 @@ export default function GroundedChatScreen() {
                     key={tab}
                     style={[styles.modalTabPill, isSelected && styles.modalTabPillActive]}
                     onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
                       setActiveDetailTab(tab);
                     }}
                   >
@@ -703,7 +648,7 @@ export default function GroundedChatScreen() {
                   {activeMsgForDetails?.actionRequired && (
                     <View style={styles.summaryCard}>
                       <View style={styles.summaryTitleRow}>
-                        <Ionicons name="checkbox-outline" size={18} color="#2563EB" />
+                        <Ionicons name="checkbox-outline" size={18} color={colors.semantic.info} />
                         <Text style={styles.summaryHeading}>Action Required</Text>
                       </View>
                       <Text style={styles.summaryBodyText}>
@@ -787,13 +732,14 @@ export default function GroundedChatScreen() {
               </View>
             </ScrollView>
           </View>
-        </Modal>
+        </SmoothModal>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic theme-aware stylesheet factory for GroundedChatScreen
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -828,12 +774,12 @@ const styles = StyleSheet.create({
     color: colors.neutral.textPrimary,
   },
   groundedTagPill: {
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: '#FED7AA',
+    borderColor: colors.brand.blushAlt,
   },
   groundedTagText: {
     fontSize: 10,
@@ -986,7 +932,7 @@ const styles = StyleSheet.create({
     ...shadows.pillButton,
   },
   primaryActionText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 16,
     fontWeight: '800',
   },
@@ -1043,7 +989,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#E8E5DF',
+    backgroundColor: colors.neutral.surfaceSubdued,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1058,7 +1004,7 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   userBubble: {
-    backgroundColor: '#FFF0EA',
+    backgroundColor: colors.brand.primaryMuted,
     borderTopRightRadius: 4,
   },
   assistantBubble: {
@@ -1081,11 +1027,11 @@ const styles = StyleSheet.create({
   },
   sourcesBox: {
     marginTop: 10,
-    backgroundColor: '#FFF8F5',
+    backgroundColor: colors.brand.blushSoft,
     borderRadius: radii.md,
     padding: spacing.sm,
     borderWidth: 1,
-    borderColor: '#FED7AA',
+    borderColor: colors.brand.blushAlt,
   },
   sourcesHeader: {
     flexDirection: 'row',
@@ -1231,7 +1177,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textSecondary,
   },
   modalTabTextActive: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
   },
   summaryCard: {
     backgroundColor: colors.neutral.surface,
@@ -1299,7 +1245,7 @@ const styles = StyleSheet.create({
   },
   noteCard: {
     flexDirection: 'row',
-    backgroundColor: '#F3F4F6',
+    backgroundColor: colors.neutral.surfaceInset,
     borderRadius: radii.lg,
     padding: spacing.md,
   },

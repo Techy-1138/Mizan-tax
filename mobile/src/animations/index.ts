@@ -49,4 +49,6 @@ export { OcrProcessingOverlay, type OcrProcessingOverlayProps } from './OcrProce
 export { AnimatedFinancialNumber, type AnimatedFinancialNumberProps } from './AnimatedFinancialNumber';
 export { AnimatedProgressBar, type AnimatedProgressBarProps } from './AnimatedProgressBar';
 export { AnimatedTypingIndicator, type AnimatedTypingIndicatorProps } from './AnimatedTypingIndicator';
+export { SmoothModal, type SmoothModalProps } from '../components/SmoothModal';
+export { AppText, MizanText, type AppTextProps } from '../components/Text';
 export { MotionShowcase } from './MotionShowcase';

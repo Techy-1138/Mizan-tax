@@ -24,11 +24,15 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, spacing, shadows } from '../../src/theme/tokens';
+import { AppPreferences } from '../../src/utils/preferences';
+import { ThemeColors, ThemeShadows, radii, spacing, fontStyles } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { MizanApi } from '../../src/services/api';
 import { AnimatedPressable } from '../../src/animations';
+import { InvoicesSkeleton } from '../../src/components/Skeleton';
+import { SmoothModal } from '../../src/components/SmoothModal';
 
 type InvoiceFilter = 'All' | 'Paid' | 'Overdue' | 'Drafts';
 
@@ -53,6 +57,9 @@ export default function InvoicesTab() {
   const router = useRouter();
   const { isRTL } = useLocale();
   const { activeBusiness } = useBusiness();
+  // Resolve theme palette & dynamic styles for Light/Dark reactivity
+  const { colors, isDark } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const [activeFilter, setActiveFilter] = useState<InvoiceFilter>('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -114,7 +121,7 @@ export default function InvoicesTab() {
   };
 
   const handleOpenInvoice = (inv: InvoiceListItem) => {
-    Haptics.selectionAsync().catch(() => {});
+    AppPreferences.selection();
     setSelectedInvoice(inv);
   };
 
@@ -123,7 +130,7 @@ export default function InvoicesTab() {
     setIsActionBusy(true);
     try {
       const issued = await MizanApi.issueInvoice(selectedInvoice.id);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
       Alert.alert(
         'Invoice Issued',
         `Invoice ${issued.invoiceNumber || selectedInvoice.invoiceNumber} has been officially issued under Article 59.`
@@ -146,7 +153,7 @@ export default function InvoicesTab() {
           ? selectedInvoice.outstandingBalance
           : selectedInvoice.grandTotal;
       await MizanApi.recordInvoicePayment(selectedInvoice.id, payAmount);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
       Alert.alert(
         'Payment Recorded',
         `${selectedInvoice.currency} ${payAmount.toLocaleString(undefined, {
@@ -247,7 +254,7 @@ export default function InvoicesTab() {
       <View style={styles.headerRow}>
         <View style={styles.brandRow}>
           <View style={styles.logoBadge}>
-            <Ionicons name="documents" size={20} color="#FFFFFF" />
+            <Ionicons name="documents" size={20} color={colors.neutral.onPrimary} />
           </View>
           <View>
             <Text style={styles.brandTitle}>Mizan ميزان</Text>
@@ -303,7 +310,7 @@ export default function InvoicesTab() {
             router.push({ pathname: '/invoices/new', params: { docType: 'TAX_INVOICE' } })
           }
         >
-          <Ionicons name="add" size={22} color="#FFFFFF" style={{ marginRight: 6 }} />
+          <Ionicons name="add" size={22} color={colors.neutral.onPrimary} style={{ marginRight: 6 }} />
           <Text style={styles.createButtonText}>
             {isRTL ? '+ فاتورة جديدة' : '+ New Tax Invoice'}
           </Text>
@@ -318,7 +325,7 @@ export default function InvoicesTab() {
             }
             activeScale={0.97}
           >
-            <View style={[styles.actionIconBox, { backgroundColor: '#FFF3ED' }]}>
+            <View style={[styles.actionIconBox, { backgroundColor: colors.brand.primaryMuted }]}>
               <Ionicons name="receipt-outline" size={22} color={colors.brand.primary} />
             </View>
             <Text style={styles.actionCardLabel}>
@@ -333,8 +340,8 @@ export default function InvoicesTab() {
             }
             activeScale={0.97}
           >
-            <View style={[styles.actionIconBox, { backgroundColor: '#F0F9FF' }]}>
-              <Ionicons name="document-text-outline" size={22} color="#0284C7" />
+            <View style={[styles.actionIconBox, { backgroundColor: colors.semantic.infoBg }]}>
+              <Ionicons name="document-text-outline" size={22} color={colors.semantic.info} />
             </View>
             <Text style={styles.actionCardLabel}>
               {isRTL ? 'إشعار دائن' : 'New Credit Note'}
@@ -348,8 +355,8 @@ export default function InvoicesTab() {
             }
             activeScale={0.97}
           >
-            <View style={[styles.actionIconBox, { backgroundColor: '#FDF2F8' }]}>
-              <Ionicons name="reader-outline" size={22} color="#DB2777" />
+            <View style={[styles.actionIconBox, { backgroundColor: colors.semantic.riskBg }]}>
+              <Ionicons name="reader-outline" size={22} color={colors.semantic.risk} />
             </View>
             <Text style={styles.actionCardLabel}>
               {isRTL ? 'إشعار مدين' : 'New Debit Note'}
@@ -361,8 +368,13 @@ export default function InvoicesTab() {
             onPress={() => router.push('/learn/chat')}
             activeScale={0.97}
           >
-            <View style={[styles.actionIconBox, { backgroundColor: '#F5F3FF' }]}>
-              <Ionicons name="sparkles-outline" size={22} color="#7C3AED" />
+            <View
+              style={[
+                styles.actionIconBox,
+                { backgroundColor: isDark ? 'rgba(139, 92, 246, 0.16)' : '#F5F3FF' },
+              ]}
+            >
+              <Ionicons name="sparkles-outline" size={22} color={isDark ? '#A78BFA' : '#7C3AED'} />
             </View>
             <Text style={styles.actionCardLabel}>
               {isRTL ? 'استشارة الذكاء' : 'Tax AI Help'}
@@ -379,7 +391,7 @@ export default function InvoicesTab() {
                 key={filter}
                 style={[styles.filterPill, isSelected && styles.filterPillActive]}
                 onPress={() => {
-                  Haptics.selectionAsync().catch(() => {});
+                  AppPreferences.selection();
                   setActiveFilter(filter);
                 }}
                 activeOpacity={0.7}
@@ -404,6 +416,7 @@ export default function InvoicesTab() {
             style={styles.searchInput}
             placeholder={isRTL ? 'ابحث برقم الفاتورة أو اسم العميل...' : 'Search by invoice # or customer...'}
             placeholderTextColor={colors.neutral.textTertiary}
+            keyboardAppearance={isDark ? 'dark' : 'light'}
             value={searchQuery}
             onChangeText={setSearchQuery}
           />
@@ -415,11 +428,7 @@ export default function InvoicesTab() {
         </View>
 
         {/* Loading Indicator */}
-        {isLoading && !refreshing && (
-          <View style={{ paddingVertical: 20 }}>
-            <ActivityIndicator size="small" color={colors.brand.primary} />
-          </View>
-        )}
+        {isLoading && !refreshing && <InvoicesSkeleton />}
 
         {/* Empty State */}
         {!isLoading && filteredInvoices.length === 0 && (
@@ -451,7 +460,7 @@ export default function InvoicesTab() {
                 }
                 activeOpacity={0.8}
               >
-                <Ionicons name="add" size={16} color="#FFFFFF" />
+                <Ionicons name="add" size={16} color={colors.neutral.onPrimary} />
                 <Text style={styles.emptyCtaBtnText}>
                   {isRTL ? 'إنشاء فاتورة جديدة' : 'Create New Invoice'}
                 </Text>
@@ -533,153 +542,156 @@ export default function InvoicesTab() {
       {/* ==================================================================== */}
       {/* INVOICE DETAILS & ACTIONS MODAL                                       */}
       {/* ==================================================================== */}
-      <Modal visible={!!selectedInvoice} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <View>
-                <Text style={styles.modalTitle}>{selectedInvoice?.invoiceNumber}</Text>
-                <Text style={styles.modalSubText}>
-                  Article 59 Statutory Tax Document
-                </Text>
-              </View>
-              <TouchableOpacity onPress={() => setSelectedInvoice(null)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
+      <SmoothModal
+        visible={!!selectedInvoice}
+        onClose={() => setSelectedInvoice(null)}
+        maxWidth={460}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeaderRow}>
+            <View>
+              <Text style={styles.modalTitle}>{selectedInvoice?.invoiceNumber}</Text>
+              <Text style={styles.modalSubText}>
+                Article 59 Statutory Tax Document
+              </Text>
             </View>
+            <TouchableOpacity onPress={() => setSelectedInvoice(null)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
+          </View>
 
-            {selectedInvoice && (
-              <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
-                <View style={styles.detailSummaryBox}>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Customer</Text>
-                    <Text style={styles.detailVal}>{selectedInvoice.customerName}</Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Issue Date</Text>
-                    <Text style={styles.detailVal}>{selectedInvoice.issueDate}</Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Due Date</Text>
-                    <Text style={styles.detailVal}>{selectedInvoice.dueDate}</Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Status</Text>
-                    <Text style={[styles.detailVal, { color: colors.brand.primary }]}>
-                      {selectedInvoice.status}
-                    </Text>
-                  </View>
+          {selectedInvoice && (
+            <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
+              <View style={styles.detailSummaryBox}>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Customer</Text>
+                  <Text style={styles.detailVal}>{selectedInvoice.customerName}</Text>
                 </View>
-
-                <View style={styles.financialBreakdownCard}>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Net Taxable Amount</Text>
-                    <Text style={styles.detailVal}>
-                      {selectedInvoice.currency}{' '}
-                      {selectedInvoice.subtotalNet.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>UAE VAT (5%)</Text>
-                    <Text style={styles.detailVal}>
-                      {selectedInvoice.currency}{' '}
-                      {selectedInvoice.vatTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                  <View style={[styles.detailRow, { borderTopWidth: 1, borderTopColor: colors.neutral.border, paddingTop: 8 }]}>
-                    <Text style={[styles.detailLabel, { fontWeight: '800', color: colors.neutral.textPrimary }]}>
-                      Grand Total
-                    </Text>
-                    <Text style={[styles.detailVal, { fontSize: 16, fontWeight: '900', color: colors.brand.primary }]}>
-                      {selectedInvoice.currency}{' '}
-                      {selectedInvoice.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                  {selectedInvoice.amountPaid > 0 && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Amount Paid</Text>
-                      <Text style={[styles.detailVal, { color: colors.semantic.successDark }]}>
-                        {selectedInvoice.currency}{' '}
-                        {selectedInvoice.amountPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                      </Text>
-                    </View>
-                  )}
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Issue Date</Text>
+                  <Text style={styles.detailVal}>{selectedInvoice.issueDate}</Text>
                 </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Due Date</Text>
+                  <Text style={styles.detailVal}>{selectedInvoice.dueDate}</Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Status</Text>
+                  <Text style={[styles.detailVal, { color: colors.brand.primary }]}>
+                    {selectedInvoice.status}
+                  </Text>
+                </View>
+              </View>
 
-                {/* Primary Lifecycle Actions */}
-                <View style={{ gap: 10, marginTop: 12 }}>
-                  {selectedInvoice.status === 'DRAFT' && (
-                    <TouchableOpacity
-                      style={styles.modalPrimaryBtn}
-                      onPress={handleIssueDraftInvoice}
-                      disabled={isActionBusy}
-                    >
-                      {isActionBusy ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
-                      ) : (
-                        <>
-                          <Ionicons name="checkmark-done-circle-outline" size={18} color="#FFFFFF" />
-                          <Text style={styles.modalPrimaryBtnText}>Issue Official Tax Invoice</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                  )}
+              <View style={styles.financialBreakdownCard}>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Net Taxable Amount</Text>
+                  <Text style={styles.detailVal}>
+                    {selectedInvoice.currency}{' '}
+                    {selectedInvoice.subtotalNet.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>UAE VAT (5%)</Text>
+                  <Text style={styles.detailVal}>
+                    {selectedInvoice.currency}{' '}
+                    {selectedInvoice.vatTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </Text>
+                </View>
+                <View style={[styles.detailRow, { borderTopWidth: 1, borderTopColor: colors.neutral.border, paddingTop: 8 }]}>
+                  <Text style={[styles.detailLabel, { fontWeight: '800', color: colors.neutral.textPrimary }]}>
+                    Grand Total
+                  </Text>
+                  <Text style={[styles.detailVal, { fontSize: 16, fontWeight: '900', color: colors.brand.primary }]}>
+                    {selectedInvoice.currency}{' '}
+                    {selectedInvoice.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </Text>
+                </View>
+                {selectedInvoice.amountPaid > 0 && (
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Amount Paid</Text>
+                    <Text style={[styles.detailVal, { color: colors.semantic.successDark }]}>
+                      {selectedInvoice.currency}{' '}
+                      {selectedInvoice.amountPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </Text>
+                  </View>
+                )}
+              </View>
 
-                  {(selectedInvoice.status === 'ISSUED' ||
-                    selectedInvoice.status === 'PARTIALLY_PAID' ||
-                    selectedInvoice.status === 'OVERDUE') && (
-                    <TouchableOpacity
-                      style={[styles.modalPrimaryBtn, { backgroundColor: colors.semantic.successDark }]}
-                      onPress={handleMarkInvoicePaid}
-                      disabled={isActionBusy}
-                    >
-                      {isActionBusy ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
-                      ) : (
-                        <>
-                          <Ionicons name="cash-outline" size={18} color="#FFFFFF" />
-                          <Text style={styles.modalPrimaryBtnText}>Record Full Payment (Mark Paid)</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                  )}
-
+              {/* Primary Lifecycle Actions */}
+              <View style={{ gap: 10, marginTop: 12 }}>
+                {selectedInvoice.status === 'DRAFT' && (
                   <TouchableOpacity
-                    style={styles.modalSecondaryBtn}
-                    onPress={handleShareInvoicePdf}
+                    style={styles.modalPrimaryBtn}
+                    onPress={handleIssueDraftInvoice}
                     disabled={isActionBusy}
                   >
-                    <Ionicons name="share-outline" size={18} color={colors.neutral.textPrimary} />
-                    <Text style={styles.modalSecondaryBtnText}>Download & Share PDF Invoice</Text>
+                    {isActionBusy ? (
+                      <ActivityIndicator size="small" color={colors.neutral.onPrimary} />
+                    ) : (
+                      <>
+                        <Ionicons name="checkmark-done-circle-outline" size={18} color={colors.neutral.onPrimary} />
+                        <Text style={styles.modalPrimaryBtnText}>Issue Official Tax Invoice</Text>
+                      </>
+                    )}
                   </TouchableOpacity>
+                )}
 
+                {(selectedInvoice.status === 'ISSUED' ||
+                  selectedInvoice.status === 'PARTIALLY_PAID' ||
+                  selectedInvoice.status === 'OVERDUE') && (
                   <TouchableOpacity
-                    style={styles.modalSecondaryBtn}
-                    onPress={() => {
-                      const invNo = selectedInvoice.invoiceNumber;
-                      setSelectedInvoice(null);
-                      router.push({
-                        pathname: '/invoices/new',
-                        params: { docType: 'CREDIT_NOTE', refInvoice: invNo },
-                      });
-                    }}
+                    style={[styles.modalPrimaryBtn, { backgroundColor: colors.semantic.successDark }]}
+                    onPress={handleMarkInvoicePaid}
+                    disabled={isActionBusy}
                   >
-                    <Ionicons name="document-text-outline" size={18} color="#0284C7" />
-                    <Text style={[styles.modalSecondaryBtnText, { color: '#0284C7' }]}>
-                      Issue Credit Note (Art. 60) Against #{selectedInvoice.invoiceNumber}
-                    </Text>
+                    {isActionBusy ? (
+                      <ActivityIndicator size="small" color={colors.neutral.onPrimary} />
+                    ) : (
+                      <>
+                        <Ionicons name="cash-outline" size={18} color={colors.neutral.onPrimary} />
+                        <Text style={styles.modalPrimaryBtnText}>Record Full Payment (Mark Paid)</Text>
+                      </>
+                    )}
                   </TouchableOpacity>
-                </View>
-              </ScrollView>
-            )}
-          </View>
+                )}
+
+                <TouchableOpacity
+                  style={styles.modalSecondaryBtn}
+                  onPress={handleShareInvoicePdf}
+                  disabled={isActionBusy}
+                >
+                  <Ionicons name="share-outline" size={18} color={colors.neutral.textPrimary} />
+                  <Text style={styles.modalSecondaryBtnText}>Download & Share PDF Invoice</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.modalSecondaryBtn}
+                  onPress={() => {
+                    const invNo = selectedInvoice.invoiceNumber;
+                    setSelectedInvoice(null);
+                    router.push({
+                      pathname: '/invoices/new',
+                      params: { docType: 'CREDIT_NOTE', refInvoice: invNo },
+                    });
+                  }}
+                >
+                  <Ionicons name="document-text-outline" size={18} color={colors.semantic.info} />
+                  <Text style={[styles.modalSecondaryBtnText, { color: colors.semantic.infoText }]}>
+                    Issue Credit Note (Art. 60) Against #{selectedInvoice.invoiceNumber}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          )}
         </View>
-      </Modal>
+      </SmoothModal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic theme-aware stylesheet factory for InvoicesTab
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -707,8 +719,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   brandTitle: {
+    ...fontStyles.displayBold,
     fontSize: 17,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   businessBadgeText: {
@@ -745,7 +757,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#E8E5DF',
+    backgroundColor: colors.neutral.surfaceSubdued,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -762,12 +774,13 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   pageTitle: {
+    ...fontStyles.displayBold,
     fontSize: 26,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
     marginBottom: 4,
   },
   pageSubtitle: {
+    ...fontStyles.bodyRegular,
     fontSize: 13,
     color: colors.neutral.textSecondary,
     lineHeight: 18,
@@ -783,7 +796,7 @@ const styles = StyleSheet.create({
     ...shadows.pillButton,
   },
   createButtonText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 15,
     fontWeight: '800',
   },
@@ -839,7 +852,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textSecondary,
   },
   filterPillTextActive: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
   },
   searchBox: {
     flexDirection: 'row',
@@ -887,7 +900,7 @@ const styles = StyleSheet.create({
     ...shadows.sm,
   },
   emptyCtaBtnText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 13,
     fontWeight: '700',
   },
@@ -917,16 +930,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   invoiceNoText: {
+    ...fontStyles.monoMedium,
     fontSize: 13,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   customerText: {
+    ...fontStyles.bodyRegular,
     fontSize: 12,
     color: colors.neutral.textSecondary,
     marginTop: 1,
   },
   dateText: {
+    ...fontStyles.bodyRegular,
     fontSize: 10,
     color: colors.neutral.textTertiary,
     marginTop: 2,
@@ -936,8 +951,8 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   amountText: {
+    ...fontStyles.monoMedium,
     fontSize: 13,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   statusBadge: {
@@ -949,36 +964,36 @@ const styles = StyleSheet.create({
     backgroundColor: colors.semantic.successBg,
   },
   statusBadgeDraft: {
-    backgroundColor: '#F3F4F6',
+    backgroundColor: colors.neutral.surfaceInset,
   },
   statusBadgeOverdue: {
     backgroundColor: colors.semantic.riskBg,
   },
   statusBadgePartPaid: {
-    backgroundColor: '#EFF6FF',
+    backgroundColor: colors.semantic.infoBg,
   },
   statusBadgeDue: {
-    backgroundColor: '#FEF3C7',
+    backgroundColor: colors.semantic.warningBg,
   },
   statusBadgeText: {
     fontSize: 10,
     fontWeight: '700',
   },
   statusTextPaid: {
-    color: colors.semantic.successDark,
+    color: colors.semantic.successText,
   },
   statusTextDraft: {
     color: colors.neutral.textSecondary,
   },
   statusTextOverdue: {
-    color: colors.semantic.risk,
+    color: colors.semantic.riskText,
   },
   statusTextDue: {
-    color: '#D97706',
+    color: colors.semantic.warningText,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    backgroundColor: colors.neutral.scrim,
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
   },
@@ -997,8 +1012,8 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   modalTitle: {
+    ...fontStyles.displayBold,
     fontSize: 18,
-    fontWeight: '900',
     color: colors.neutral.textPrimary,
   },
   modalSubText: {
@@ -1045,7 +1060,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
   },
   modalPrimaryBtnText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 13,
     fontWeight: '800',
   },

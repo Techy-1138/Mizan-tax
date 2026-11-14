@@ -15,21 +15,39 @@ import {
   TouchableOpacity,
   Modal,
   Alert,
+  Image,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
+import { AppPreferences } from '../../src/utils/preferences';
 import { SafeAreaView } from '../../src/components/SafeAreaView';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import {
+  ThemeColors,
+  ThemeShadows,
+  radii,
+  spacing,
+  typography,
+  fontStyles,
+  getFont,
+  getMonoFont,
+} from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
-import { ScreenSection, AnimatedPressable, AnimatedProgressBar, AnimatedFinancialNumber } from '../../src/animations';
+import { ScreenSection, AnimatedPressable, AnimatedProgressBar, AnimatedFinancialNumber, SmoothModal } from '../../src/animations';
 import { MizanApi } from '../../src/services/api';
+import { DashboardSkeleton } from '../../src/components/Skeleton';
+import { CtRegistrationCountdownWidget } from '../../src/components/CtRegistrationCountdownWidget';
+import { SyncStatusPill } from '../../src/components/SyncStatusPill';
 
 export default function HomeScreen() {
   const router = useRouter();
   const { isRTL } = useLocale();
   const { activeBusiness, businesses, currentUser } = useBusiness();
+  // Resolve active theme palette & dynamic styles for reactive Light/Dark transitions
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [refreshing, setRefreshing] = useState(false);
   const [dashboard, setDashboard] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -86,7 +104,8 @@ export default function HomeScreen() {
           <Text style={styles.brandTitle}>Mizan ميزان</Text>
         </View>
 
-        <View style={[styles.headerActions, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+        <View style={[styles.headerActions, { flexDirection: isRTL ? 'row-reverse' : 'row', alignItems: 'center' }]}>
+          <SyncStatusPill />
           <TouchableOpacity
             style={styles.headerIconButton}
             activeOpacity={0.7}
@@ -107,7 +126,14 @@ export default function HomeScreen() {
             activeOpacity={0.7}
             onPress={() => router.push('/(tabs)/profile')}
           >
-            <Text style={styles.avatarText}>{avatarInitials}</Text>
+            {currentUser?.profilePictureUrl ? (
+              <Image
+                source={{ uri: currentUser.profilePictureUrl }}
+                style={{ width: 34, height: 34, borderRadius: 17 }}
+              />
+            ) : (
+              <Text style={styles.avatarText}>{avatarInitials}</Text>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -125,8 +151,12 @@ export default function HomeScreen() {
           />
         }
       >
-        {/* User Greeting & Skyline Backdrop */}
-        <ScreenSection index={0}>
+        {loading && !dashboard && !refreshing ? (
+          <DashboardSkeleton />
+        ) : (
+          <>
+            {/* User Greeting & Skyline Backdrop */}
+            <ScreenSection index={0}>
           <View style={styles.greetingSection}>
             <View style={[styles.greetingTextCol, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
               <Text style={[styles.greetingTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
@@ -165,7 +195,7 @@ export default function HomeScreen() {
                 onPress={() => router.push('/scan')}
                 activeOpacity={0.85}
               >
-                <Ionicons name="camera-outline" size={20} color="#FFFFFF" />
+                <Ionicons name="camera-outline" size={20} color={colors.neutral.onPrimary} />
                 <Text style={styles.onboardingBtnText}>
                   {isRTL ? 'مسح الرخصة التجارية بالكاميرا' : 'Scan Trade License'}
                 </Text>
@@ -203,14 +233,15 @@ export default function HomeScreen() {
                         style={[
                           styles.compliantBadge,
                           dashboard?.readiness?.status !== 'AUDIT_READY' && {
-                            backgroundColor: '#FEF3C7',
+                            backgroundColor: colors.semantic.warningBg,
+                            borderColor: colors.semantic.warningBorder,
                           },
                         ]}
                       >
                         <Text
                           style={[
                             styles.compliantBadgeText,
-                            dashboard?.readiness?.status !== 'AUDIT_READY' && { color: '#B45309' },
+                            dashboard?.readiness?.status !== 'AUDIT_READY' && { color: colors.semantic.warningText },
                           ]}
                         >
                           {dashboard?.readiness?.status === 'AUDIT_READY'
@@ -249,6 +280,9 @@ export default function HomeScreen() {
               </View>
             </TouchableOpacity>
           )}
+
+          {/* Corporate Tax Registration Deadline Tracker (FTA Decision No. 3 of 2024 / CD 75/2023) */}
+          <CtRegistrationCountdownWidget />
         </ScreenSection>
 
         {/* 3 Metrics Cards Grid */}
@@ -322,7 +356,7 @@ export default function HomeScreen() {
                 style={[
                   styles.sbrEligibleChip,
                   Number(dashboard?.financials?.totalRevenueAED ?? 0) > 3000000 && {
-                    backgroundColor: '#FEE2E2',
+                    backgroundColor: colors.semantic.riskBg,
                   },
                 ]}
               >
@@ -330,7 +364,7 @@ export default function HomeScreen() {
                   style={[
                     styles.sbrEligibleText,
                     Number(dashboard?.financials?.totalRevenueAED ?? 0) > 3000000 && {
-                      color: '#DC2626',
+                      color: colors.semantic.riskText,
                     },
                   ]}
                 >
@@ -403,7 +437,7 @@ export default function HomeScreen() {
               activeScale={0.92}
               style={styles.actionItem}
               onPress={() => {
-                Haptics.selectionAsync().catch(() => {});
+                AppPreferences.selection();
                 setBankModalVisible(true);
               }}
             >
@@ -539,7 +573,7 @@ export default function HomeScreen() {
                       style={[styles.calendarItemRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}
                       activeOpacity={0.75}
                       onPress={() => {
-                        Haptics.selectionAsync().catch(() => {});
+                        AppPreferences.selection();
                         setSelectedDeadline(dl);
                       }}
                     >
@@ -558,15 +592,21 @@ export default function HomeScreen() {
                       <View
                         style={[
                           styles.dueDaysChip,
-                          dl.status === 'OVERDUE' && { backgroundColor: '#FEE2E2' },
-                          dl.status === 'UPCOMING' && { backgroundColor: '#E0F2FE' },
+                          dl.status === 'OVERDUE' && {
+                            backgroundColor: colors.semantic.riskBg,
+                            borderColor: colors.semantic.riskBorder,
+                          },
+                          dl.status === 'UPCOMING' && {
+                            backgroundColor: colors.semantic.infoBg,
+                            borderColor: colors.semantic.infoBorder,
+                          },
                         ]}
                       >
                         <Text
                           style={[
                             styles.dueDaysText,
-                            dl.status === 'OVERDUE' && { color: '#DC2626' },
-                            dl.status === 'UPCOMING' && { color: '#0369A1' },
+                            dl.status === 'OVERDUE' && { color: colors.semantic.riskText },
+                            dl.status === 'UPCOMING' && { color: colors.semantic.infoText },
                           ]}
                         >
                           {dl.daysRemaining < 0
@@ -589,7 +629,7 @@ export default function HomeScreen() {
                   style={[styles.calendarItemRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}
                   activeOpacity={0.75}
                   onPress={() => {
-                    Haptics.selectionAsync().catch(() => {});
+                    AppPreferences.selection();
                     setSelectedDeadline({
                       title: isRTL ? 'إقرار ضريبة القيمة المضافة (نموذج 201)' : 'VAT Return (Form 201)',
                       legalReference: isRTL ? 'المادة 71 من مرسوم بقانون 8/2017' : 'Article 71 of FDL 8/2017',
@@ -623,12 +663,21 @@ export default function HomeScreen() {
           </View>
         </ScreenSection>
 
-        {/* Ask Mizan AI Banner */}
+        {/* Ask Mizan AI Banner - Locked behind Coming Soon */}
         <ScreenSection index={5}>
           <TouchableOpacity
             style={styles.aiBannerCard}
             activeOpacity={0.88}
-            onPress={() => router.push('/learn/chat')}
+            onPress={() => {
+              AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
+              Alert.alert(
+                isRTL ? 'مساعد ميزان الضريبي — قريباً' : 'Mizan AI Tax Advisor — Coming Soon',
+                isRTL
+                  ? 'المساعد الضريبي المستند إلى القوانين الاتحادية وهيئة الضرائب قيد المراجعة التنظيمية حالياً. يرجى استخدام الحسابات اليدوية والتقارير المعتمدة في تبويب الضرائب.'
+                  : 'Our FTA-grounded statutory tax intelligence engine is currently in private regulatory preview. Please use the verified manual tax calculators and legal schedules in the Tax & Filings hub.',
+                [{ text: 'OK' }]
+              );
+            }}
           >
             <View style={[styles.aiBannerContent, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
               <View style={[styles.aiBannerLeft, isRTL ? { marginLeft: 12, marginRight: 0, alignItems: 'flex-end' } : { marginRight: 12, marginLeft: 0, alignItems: 'flex-start' }]}>
@@ -637,236 +686,255 @@ export default function HomeScreen() {
                   <Text style={styles.aiBannerTitle}>
                     Ask Mizan <Text style={{ color: colors.brand.primary }}>AI</Text>
                   </Text>
+                  <View style={{ backgroundColor: colors.brand.primaryMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.xs, borderWidth: 1, borderColor: colors.brand.primaryLight }}>
+                    <Text style={{ fontSize: 9, fontWeight: '800', color: colors.brand.primary }}>COMING SOON</Text>
+                  </View>
                 </View>
                 <Text style={[styles.aiBannerDesc, { textAlign: isRTL ? 'right' : 'left' }]}>
                   {isRTL
-                    ? 'احصل على إجابات فورية واستشارات دقيقة وفقاً للقوانين الإماراتية.'
-                    : 'Get instant, UAE-specific tax answers, calculations, and compliance guidance.'}
+                    ? 'الاستشارات الضريبية الفورية المبنية على قرارات الهيئة الاتحادية للضرائب (قيد الإطلاق التجريبي).'
+                    : 'Statutory UAE tax guidance and FTA-grounded legal explanations (Regulatory Preview).'}
                 </Text>
               </View>
 
-              <View style={[styles.askAnythingButton, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <View style={[styles.askAnythingButton, { flexDirection: isRTL ? 'row-reverse' : 'row', opacity: 0.85 }]}>
+                <Ionicons name="lock-closed" size={12} color={colors.neutral.textSecondary} style={{ marginRight: 4 }} />
                 <Text style={styles.askAnythingText}>
-                  {isRTL ? 'اسأل الآن' : 'Ask Anything'}
+                  {isRTL ? 'قريباً' : 'Preview'}
                 </Text>
-                <Ionicons
-                  name={isRTL ? 'arrow-back' : 'arrow-forward'}
-                  size={14}
-                  color={colors.neutral.textPrimary}
-                />
               </View>
             </View>
           </TouchableOpacity>
         </ScreenSection>
+        </>
+      )}
 
         {/* Bottom padding for tab bar */}
         <View style={{ height: 40 }} />
       </ScrollView>
 
-      {/* UAE Open Banking & Statement Sync Modal */}
-      <Modal visible={bankModalVisible} animationType="slide" transparent>
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: 'rgba(15, 23, 42, 0.55)',
-            justifyContent: 'center',
-            paddingHorizontal: spacing.lg,
-          }}
-        >
+      {/* UAE Business Banking & Statement Reconciliation Modal */}
+      <SmoothModal
+        visible={bankModalVisible}
+        onClose={() => setBankModalVisible(false)}
+        maxWidth={460}
+      >
+        <View style={{ padding: spacing.lg }}>
           <View
             style={{
-              backgroundColor: colors.neutral.surface,
-              borderRadius: radii.xl,
-              padding: spacing.lg,
-              borderWidth: 1,
-              borderColor: colors.neutral.border,
-              ...shadows.cardHover,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 8,
             }}
           >
-            <View
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                marginBottom: 12,
-              }}
-            >
+            <View>
               <Text style={{ fontSize: 17, fontWeight: '800', color: colors.neutral.textPrimary }}>
-                {isRTL ? 'ربط الحسابات البنكية الإماراتية' : 'UAE Business Bank Sync'}
+                {isRTL ? 'الربط البنكي وكشوف الحسابات' : 'UAE Business Banking'}
               </Text>
-              <TouchableOpacity onPress={() => setBankModalVisible(false)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
+              <Text style={{ fontSize: 11, color: colors.neutral.textSecondary, marginTop: 2 }}>
+                {isRTL ? 'إدارة المعاملات المالية ومطابقة الدفاتر' : 'Manage corporate transactions & ledger matching'}
+              </Text>
             </View>
+            <TouchableOpacity onPress={() => setBankModalVisible(false)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
+          </View>
 
-            <Text style={{ fontSize: 12, color: colors.neutral.textSecondary, marginBottom: 14, lineHeight: 18 }}>
-              {isRTL
-                ? 'قم بمزامنة كشوف الحسابات البنكية أو مسح الفواتير مباشرة إلى دفاتر شركتك.'
-                : 'Select your UAE corporate bank to sync statement transactions or scan a receipt/statement directly.'}
-            </Text>
-
-            {[
-              { name: 'Wio Business (UAE Open Banking)', tag: 'Instant Feed' },
-              { name: 'Mashreq NeoBiz Corporate', tag: 'Statement Sync' },
-              { name: 'Emirates NBD BusinessBanking', tag: 'Statement Sync' },
-              { name: 'ADCB ProCash / First Abu Dhabi Bank', tag: 'Statement Sync' },
-            ].map((bank) => (
-              <TouchableOpacity
-                key={bank.name}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  paddingVertical: 12,
-                  paddingHorizontal: 12,
-                  backgroundColor: colors.neutral.canvas,
-                  borderRadius: radii.md,
-                  marginBottom: 8,
-                  borderWidth: 1,
-                  borderColor: colors.neutral.border,
-                }}
-                onPress={() => {
-                  setBankModalVisible(false);
-                  Alert.alert(
-                    bank.name,
-                    'Bank ledger feed synchronized with your Mizan Financial Books.',
-                    [
-                      {
-                        text: 'Open Financial Ledger',
-                        onPress: () => router.push('/(tabs)/books'),
-                      },
-                      { text: 'OK' },
-                    ]
-                  );
-                }}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <Ionicons name="business-outline" size={18} color={colors.brand.primary} />
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: colors.neutral.textPrimary }}>
-                    {bank.name}
-                  </Text>
-                </View>
-                <Text style={{ fontSize: 11, fontWeight: '700', color: colors.brand.primary }}>
-                  {bank.tag}
+          {/* ACTIVE SECTION: Manual Bank Statement Import (themed semantic success surface) */}
+          <View
+            style={{
+              backgroundColor: colors.semantic.successBg,
+              borderRadius: radii.md,
+              padding: 12,
+              borderWidth: 1,
+              borderColor: colors.semantic.successBorder,
+              marginTop: 10,
+              marginBottom: 14,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons name="document-attach" size={16} color={colors.semantic.successDark} />
+                <Text style={{ fontSize: 12, fontWeight: '800', color: colors.semantic.successText }}>
+                  {isRTL ? 'استيراد كشف الحساب (CSV / Excel)' : 'Manual Statement Import (CSV / Excel)'}
                 </Text>
-              </TouchableOpacity>
-            ))}
-
+              </View>
+              <View style={{ backgroundColor: colors.semantic.successDark, paddingHorizontal: 6, paddingVertical: 1, borderRadius: radii.pill }}>
+                <Text style={{ fontSize: 9, fontWeight: '800', color: colors.neutral.onPrimary }}>ACTIVE</Text>
+              </View>
+            </View>
+            <Text style={{ fontSize: 11, color: colors.semantic.successText, lineHeight: 16, marginBottom: 10 }}>
+              {isRTL
+                ? 'استيراد فوري لكشوف حسابات بنك الإمارات دبي الوطني، أبوظبي الأول، ويو، والمشرق مع تحويل العملات الأجنبية بأسعار المصرف المركزي.'
+                : 'Import statements from Emirates NBD, ADCB, FAB, or Wio with deterministic multi-currency conversion at CBUAE rates.'}
+            </Text>
             <TouchableOpacity
               style={{
-                backgroundColor: colors.brand.primary,
-                paddingVertical: 13,
-                borderRadius: radii.md,
+                backgroundColor: colors.semantic.successDark,
+                paddingVertical: 10,
+                borderRadius: radii.sm,
                 alignItems: 'center',
-                marginTop: 8,
+                flexDirection: 'row',
+                justifyContent: 'center',
+                gap: 6,
               }}
               onPress={() => {
                 setBankModalVisible(false);
                 router.push('/(tabs)/books');
               }}
             >
-              <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '800' }}>
-                {isRTL ? 'عرض الدفاتر المالية ←' : 'Open Financial Books & Ledger →'}
+              <Ionicons name="cloud-upload-outline" size={15} color={colors.neutral.onPrimary} />
+              <Text style={{ color: colors.neutral.onPrimary, fontSize: 12, fontWeight: '700' }}>
+                {isRTL ? 'فتح مستورد الكشوف في الدفاتر ←' : 'Open Statement Importer in Books →'}
               </Text>
             </TouchableOpacity>
           </View>
-        </View>
-      </Modal>
 
-      {/* Statutory Tax Deadline Detail Modal */}
-      <Modal visible={!!selectedDeadline} animationType="fade" transparent>
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: 'rgba(15, 23, 42, 0.55)',
-            justifyContent: 'center',
-            paddingHorizontal: spacing.lg,
-          }}
-        >
-          <View
-            style={{
-              backgroundColor: colors.neutral.surface,
-              borderRadius: radii.xl,
-              padding: spacing.lg,
-              borderWidth: 1,
-              borderColor: colors.neutral.border,
-              ...shadows.cardHover,
-            }}
-          >
-            <View
+          {/* COMING SOON SECTION: Direct Open Banking Live Feeds */}
+          <View style={{ marginBottom: 6 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <Text style={{ fontSize: 12, fontWeight: '800', color: colors.neutral.textSecondary }}>
+                {isRTL ? 'الربط المباشر (Open Banking)' : 'Direct Live Feeds (Open Banking)'}
+              </Text>
+              <View style={{ backgroundColor: colors.neutral.canvas, paddingHorizontal: 6, paddingVertical: 1, borderRadius: radii.pill, borderWidth: 1, borderColor: colors.neutral.border }}>
+                <Text style={{ fontSize: 9, fontWeight: '700', color: colors.neutral.textSecondary }}>COMING SOON</Text>
+              </View>
+            </View>
+            <Text style={{ fontSize: 11, color: colors.neutral.textTertiary, marginBottom: 8, lineHeight: 15 }}>
+              {isRTL
+                ? 'الربط اللحظي المباشر عبر إطار العمل المصرفي المفتوح للمصرف المركزي قيد الاعتماد.'
+                : 'Direct API account streaming under the CBUAE Open Finance framework is in regulatory preparation.'}
+            </Text>
+          </View>
+
+          {[
+            { name: 'Wio Business (UAE Open Banking)', tag: 'Coming Soon' },
+            { name: 'Mashreq NeoBiz Corporate', tag: 'Coming Soon' },
+            { name: 'Emirates NBD BusinessBanking', tag: 'Coming Soon' },
+            { name: 'ADCB ProCash / First Abu Dhabi Bank', tag: 'Coming Soon' },
+          ].map((bank) => (
+            <TouchableOpacity
+              key={bank.name}
               style={{
                 flexDirection: 'row',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                marginBottom: 12,
+                paddingVertical: 10,
+                paddingHorizontal: 12,
+                backgroundColor: colors.neutral.canvas,
+                borderRadius: radii.md,
+                marginBottom: 6,
+                borderWidth: 1,
+                borderColor: colors.neutral.border,
+                opacity: 0.75,
+              }}
+              onPress={() => {
+                AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
+                Alert.alert(
+                  bank.name,
+                  'Direct Open Banking streaming with UAE financial institutions is currently in regulatory integration. Please use the Manual Statement Import (CSV/Excel) above to reconcile your ledger.',
+                  [{ text: 'OK' }]
+                );
               }}
             >
-              <Text style={{ fontSize: 16, fontWeight: '800', color: colors.neutral.textPrimary, flex: 1 }}>
-                {selectedDeadline?.title}
-              </Text>
-              <TouchableOpacity onPress={() => setSelectedDeadline(null)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="lock-closed-outline" size={15} color={colors.neutral.textTertiary} />
+                <Text style={{ fontSize: 12, fontWeight: '600', color: colors.neutral.textSecondary }}>
+                  {bank.name}
+                </Text>
+              </View>
+              <View style={{ backgroundColor: colors.neutral.surfaceInset, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.xs }}>
+                <Text style={{ fontSize: 9, fontWeight: '700', color: colors.neutral.textSecondary }}>
+                  {bank.tag}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </SmoothModal>
+
+      {/* Statutory Tax Deadline Detail Modal */}
+      <SmoothModal
+        visible={!!selectedDeadline}
+        onClose={() => setSelectedDeadline(null)}
+        maxWidth={460}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 12,
+            }}
+          >
+            <Text style={{ fontSize: 16, fontWeight: '800', color: colors.neutral.textPrimary, flex: 1 }}>
+              {selectedDeadline?.title}
+            </Text>
+            <TouchableOpacity onPress={() => setSelectedDeadline(null)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
+          </View>
+
+          {selectedDeadline && (
+            <View style={{ gap: 10 }}>
+              <View
+                style={{
+                  backgroundColor: colors.neutral.canvas,
+                  padding: 12,
+                  borderRadius: radii.md,
+                  gap: 6,
+                }}
+              >
+                <Text style={{ fontSize: 12, color: colors.neutral.textSecondary }}>
+                  Statutory Citation:{' '}
+                  <Text style={{ fontWeight: '700', color: colors.neutral.textPrimary }}>
+                    {selectedDeadline.legalReference}
+                  </Text>
+                </Text>
+                <Text style={{ fontSize: 12, color: colors.neutral.textSecondary }}>
+                  Due Date:{' '}
+                  <Text style={{ fontWeight: '700', color: colors.brand.primary }}>
+                    {String(selectedDeadline.calculatedDueDate || '2026-12-28').slice(0, 10)}
+                  </Text>
+                </Text>
+                <Text style={{ fontSize: 12, color: colors.neutral.textSecondary }}>
+                  FTA Late Penalty Rule:{' '}
+                  <Text style={{ fontWeight: '700', color: colors.semantic.risk }}>
+                    {selectedDeadline.penaltyInfo ||
+                      'AED 1,000 – AED 10,000 administrative penalty under Cabinet Decision No. 40/2017 & 75/2023.'}
+                  </Text>
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={{
+                  backgroundColor: colors.brand.primary,
+                  paddingVertical: 13,
+                  borderRadius: radii.md,
+                  alignItems: 'center',
+                  marginTop: 6,
+                }}
+                onPress={() => {
+                  setSelectedDeadline(null);
+                  router.push('/(tabs)/tax');
+                }}
+              >
+                <Text style={{ color: colors.neutral.onPrimary, fontSize: 13, fontWeight: '800' }}>
+                  {isRTL ? 'الانتقال إلى المركز الضريبي ←' : 'Prepare & Review in Tax Hub →'}
+                </Text>
               </TouchableOpacity>
             </View>
-
-            {selectedDeadline && (
-              <View style={{ gap: 10 }}>
-                <View
-                  style={{
-                    backgroundColor: colors.neutral.canvas,
-                    padding: 12,
-                    borderRadius: radii.md,
-                    gap: 6,
-                  }}
-                >
-                  <Text style={{ fontSize: 12, color: colors.neutral.textSecondary }}>
-                    Statutory Citation:{' '}
-                    <Text style={{ fontWeight: '700', color: colors.neutral.textPrimary }}>
-                      {selectedDeadline.legalReference}
-                    </Text>
-                  </Text>
-                  <Text style={{ fontSize: 12, color: colors.neutral.textSecondary }}>
-                    Due Date:{' '}
-                    <Text style={{ fontWeight: '700', color: colors.brand.primary }}>
-                      {String(selectedDeadline.calculatedDueDate || '2026-12-28').slice(0, 10)}
-                    </Text>
-                  </Text>
-                  <Text style={{ fontSize: 12, color: colors.neutral.textSecondary }}>
-                    FTA Late Penalty Rule:{' '}
-                    <Text style={{ fontWeight: '700', color: colors.semantic.risk }}>
-                      {selectedDeadline.penaltyInfo ||
-                        'AED 1,000 – AED 10,000 administrative penalty under Cabinet Decision No. 40/2017 & 75/2023.'}
-                    </Text>
-                  </Text>
-                </View>
-
-                <TouchableOpacity
-                  style={{
-                    backgroundColor: colors.brand.primary,
-                    paddingVertical: 13,
-                    borderRadius: radii.md,
-                    alignItems: 'center',
-                    marginTop: 6,
-                  }}
-                  onPress={() => {
-                    setSelectedDeadline(null);
-                    router.push('/(tabs)/tax');
-                  }}
-                >
-                  <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '800' }}>
-                    {isRTL ? 'الانتقال إلى المركز الضريبي ←' : 'Prepare & Review in Tax Hub →'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
+          )}
         </View>
-      </Modal>
+      </SmoothModal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic theme-aware stylesheet factory for HomeScreen
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -914,8 +982,8 @@ const styles = StyleSheet.create({
     transform: [{ skewX: '-18deg' }],
   },
   brandTitle: {
+    ...fontStyles.displayBold,
     fontSize: 20,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   headerActions: {
@@ -953,8 +1021,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   avatarText: {
+    ...fontStyles.displayBold,
     fontSize: 13,
-    fontWeight: '700',
     color: colors.neutral.textPrimary,
   },
   greetingSection: {
@@ -962,12 +1030,13 @@ const styles = StyleSheet.create({
   },
   greetingTextCol: {},
   greetingTitle: {
+    ...fontStyles.displayBold,
     fontSize: 24,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
     marginBottom: 4,
   },
   greetingSubtitle: {
+    ...fontStyles.bodyRegular,
     fontSize: 14,
     color: colors.neutral.textSecondary,
   },
@@ -991,13 +1060,14 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   onboardingTitle: {
+    ...fontStyles.displayBold,
     fontSize: 18,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
     marginBottom: 6,
     textAlign: 'center',
   },
   onboardingDesc: {
+    ...fontStyles.bodyRegular,
     fontSize: 13,
     color: colors.neutral.textSecondary,
     lineHeight: 20,
@@ -1017,14 +1087,16 @@ const styles = StyleSheet.create({
     ...shadows.sm,
   },
   onboardingBtnText: {
-    color: '#FFFFFF',
+    ...fontStyles.bodyBold,
+    color: colors.neutral.onPrimary,
     fontSize: 15,
-    fontWeight: '700',
   },
   complianceCard: {
     backgroundColor: colors.brand.darkHero,
     borderRadius: radii.xl,
     padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.brand.darkHeroBorder,
     overflow: 'hidden',
     marginBottom: spacing.md,
     ...shadows.cardHover,
@@ -1059,9 +1131,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.semantic.success,
   },
   complianceLabel: {
+    ...fontStyles.bodySemiBold,
     fontSize: 13,
-    fontWeight: '600',
-    color: colors.neutral.surfaceSubdued,
+    // Keep high-contrast off-white text on darkHero card in both light and dark modes
+    color: '#E5E7EB',
   },
   scoreRow: {
     flexDirection: 'row',
@@ -1070,9 +1143,9 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   scoreText: {
+    ...fontStyles.displayBold,
     fontSize: 34,
-    fontWeight: '900',
-    color: colors.neutral.white,
+    color: colors.neutral.onPrimary,
   },
   compliantBadge: {
     backgroundColor: colors.semantic.successBg,
@@ -1083,13 +1156,14 @@ const styles = StyleSheet.create({
     borderColor: colors.semantic.successBorder,
   },
   compliantBadgeText: {
+    ...fontStyles.bodyBold,
     fontSize: 11,
-    fontWeight: '700',
-    color: colors.semantic.successDark,
+    color: colors.semantic.successText,
   },
   complianceSubtext: {
+    ...fontStyles.bodyRegular,
     fontSize: 12,
-    color: colors.neutral.textTertiary,
+    color: '#9CA3AF',
   },
   shieldContainer: {},
   shieldOuterGlow: {
@@ -1126,18 +1200,19 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   metricLabel: {
+    ...fontStyles.bodyBold,
     fontSize: 11,
-    fontWeight: '700',
     color: colors.neutral.textSecondary,
     marginBottom: 4,
   },
   metricAmount: {
+    ...fontStyles.monoMedium,
     fontSize: 14,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
     marginBottom: 4,
   },
   metricSub: {
+    ...fontStyles.bodyRegular,
     fontSize: 10,
     color: colors.neutral.textTertiary,
   },
@@ -1150,9 +1225,9 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   sbrEligibleText: {
+    ...fontStyles.bodyBold,
     fontSize: 10,
-    fontWeight: '700',
-    color: colors.semantic.successDark,
+    color: colors.semantic.successText,
   },
   sbrProgressBarBg: {
     height: 4,
@@ -1191,8 +1266,8 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   actionLabel: {
+    ...fontStyles.bodyMedium,
     fontSize: 11,
-    fontWeight: '600',
     color: colors.neutral.textPrimary,
     textAlign: 'center',
     lineHeight: 14,
@@ -1218,8 +1293,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cardHeaderText: {
+    ...fontStyles.displayBold,
     fontSize: 16,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   viewAllRow: {
@@ -1228,8 +1303,8 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   viewAllText: {
+    ...fontStyles.bodyMedium,
     fontSize: 12,
-    fontWeight: '600',
     color: colors.neutral.textSecondary,
   },
   calendarItemRow: {
@@ -1246,25 +1321,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   dateBadgeMonth: {
+    ...fontStyles.bodyBold,
     fontSize: 9,
-    fontWeight: '800',
     color: colors.brand.primary,
   },
   dateBadgeDay: {
+    ...fontStyles.displayBold,
     fontSize: 16,
-    fontWeight: '900',
     color: colors.brand.primary,
   },
   calendarInfoCol: {
     flex: 1,
   },
   calendarItemTitle: {
+    ...fontStyles.bodyBold,
     fontSize: 14,
-    fontWeight: '700',
     color: colors.neutral.textPrimary,
     marginBottom: 2,
   },
   calendarItemSub: {
+    ...fontStyles.bodyRegular,
     fontSize: 12,
     color: colors.neutral.textSecondary,
   },
@@ -1277,8 +1353,8 @@ const styles = StyleSheet.create({
     borderColor: colors.brand.blushAlt,
   },
   dueDaysText: {
+    ...fontStyles.bodyBold,
     fontSize: 11,
-    fontWeight: '700',
     color: colors.brand.primary,
   },
   upcomingChip: {
@@ -1290,8 +1366,8 @@ const styles = StyleSheet.create({
     borderColor: colors.neutral.border,
   },
   upcomingText: {
+    ...fontStyles.bodyMedium,
     fontSize: 11,
-    fontWeight: '600',
     color: colors.neutral.textSecondary,
   },
   itemDivider: {
@@ -1324,11 +1400,12 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   aiBannerTitle: {
+    ...fontStyles.displayBold,
     fontSize: 16,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   aiBannerDesc: {
+    ...fontStyles.bodyRegular,
     fontSize: 12,
     color: colors.neutral.textSecondary,
     lineHeight: 16,
@@ -1346,8 +1423,8 @@ const styles = StyleSheet.create({
     ...shadows.card,
   },
   askAnythingText: {
+    ...fontStyles.bodyBold,
     fontSize: 12,
-    fontWeight: '700',
     color: colors.neutral.textPrimary,
   },
   financialSummaryCard: {
@@ -1374,29 +1451,29 @@ const styles = StyleSheet.create({
     borderColor: colors.neutral.border,
   },
   finMetricLabel: {
+    ...fontStyles.bodyMedium,
     fontSize: 11,
-    fontWeight: '600',
     color: colors.neutral.textSecondary,
     marginBottom: 4,
   },
   finMetricValPositive: {
+    ...fontStyles.monoMedium,
     fontSize: 15,
-    fontWeight: '800',
-    color: '#059669',
+    color: colors.semantic.success,
   },
   finMetricValNeutral: {
+    ...fontStyles.monoMedium,
     fontSize: 15,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   finMetricValPrimary: {
+    ...fontStyles.monoMedium,
     fontSize: 15,
-    fontWeight: '800',
     color: colors.brand.primary,
   },
   finMetricValWarning: {
+    ...fontStyles.monoMedium,
     fontSize: 15,
-    fontWeight: '800',
-    color: '#D97706',
+    color: colors.semantic.warning,
   },
 });

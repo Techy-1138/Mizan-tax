@@ -15,7 +15,7 @@ import Animated, {
   withDelay,
   cancelAnimation,
 } from 'react-native-reanimated';
-import { colors } from '../theme/tokens';
+import { useTheme } from '../context/ThemeContext';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
 
 export interface AnimatedTypingIndicatorProps {
@@ -26,9 +26,11 @@ export interface AnimatedTypingIndicatorProps {
 
 export const AnimatedTypingIndicator: React.FC<AnimatedTypingIndicatorProps> = ({
   dotSize = 7,
-  dotColor = colors.brand.primary,
+  dotColor,
   style,
 }) => {
+  const { colors } = useTheme();
+  const resolvedDotColor = dotColor || colors.brand.primary;
   const isReducedMotion = useReduceMotionPreference();
 
   const dot1 = useSharedValue<number>(0);
@@ -80,21 +82,21 @@ export const AnimatedTypingIndicator: React.FC<AnimatedTypingIndicatorProps> = (
       <Animated.View
         style={[
           styles.dot,
-          { width: dotSize, height: dotSize, borderRadius: dotSize / 2, backgroundColor: dotColor },
+          { width: dotSize, height: dotSize, borderRadius: dotSize / 2, backgroundColor: resolvedDotColor },
           styleDot1,
         ]}
       />
       <Animated.View
         style={[
           styles.dot,
-          { width: dotSize, height: dotSize, borderRadius: dotSize / 2, backgroundColor: dotColor },
+          { width: dotSize, height: dotSize, borderRadius: dotSize / 2, backgroundColor: resolvedDotColor },
           styleDot2,
         ]}
       />
       <Animated.View
         style={[
           styles.dot,
-          { width: dotSize, height: dotSize, borderRadius: dotSize / 2, backgroundColor: dotColor },
+          { width: dotSize, height: dotSize, borderRadius: dotSize / 2, backgroundColor: resolvedDotColor },
           styleDot3,
         ]}
       />

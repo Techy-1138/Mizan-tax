@@ -26,7 +26,8 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { SafeAreaView } from '../../src/components/SafeAreaView';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { VisionOcr } from '../../src/services/visionOcr';
@@ -137,6 +138,9 @@ export default function BusinessOnboardingScreen() {
   const router = useRouter();
   const { isRTL, toggleLocale, locale } = useLocale();
   const { currentUser, addOrUpdateBusiness, refreshBusinesses } = useBusiness();
+  // Resolve theme palette & dynamic styles for Light/Dark onboarding
+  const { colors, isDark } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   // Wizard Step State (1: Entity & Name, 2: Jurisdiction & Authority, 3: Revenue & Tax Profile)
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
@@ -771,7 +775,7 @@ export default function BusinessOnboardingScreen() {
               {/* OCR Auto-Extracted Success Badge */}
               {extractedBadge && (
                 <View style={[styles.ocrSuccessBanner, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                  <Ionicons name="sparkles" size={18} color="#059669" />
+                  <Ionicons name="sparkles" size={18} color={colors.semantic.successDark} />
                   <Text style={[styles.ocrSuccessBannerText, { textAlign: isRTL ? 'right' : 'left' }]}>
                     {extractedBadge}
                   </Text>
@@ -813,7 +817,7 @@ export default function BusinessOnboardingScreen() {
                     ]}
                   >
                     {isDone ? (
-                      <Ionicons name="checkmark" size={14} color="#FFF" />
+                      <Ionicons name="checkmark" size={14} color={colors.neutral.onPrimary} />
                     ) : (
                       <Text
                         style={[
@@ -891,6 +895,7 @@ export default function BusinessOnboardingScreen() {
                     onFocus={() => handleFieldFocus('legalName')}
                     placeholder={isRTL ? 'مثال: شركة نور الإتقان للتجارة العامة ش.ذ.م.م' : 'e.g. Noor Al Itqan General Trading LLC'}
                     placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                     autoCapitalize="words"
                   />
                 </View>
@@ -918,6 +923,7 @@ export default function BusinessOnboardingScreen() {
                     onFocus={() => handleFieldFocus('tradeName')}
                     placeholder={isRTL ? 'مثال: نور الإتقان (اختياري)' : 'e.g. Noor Al Itqan (Optional)'}
                     placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 </View>
               </View>
@@ -952,6 +958,7 @@ export default function BusinessOnboardingScreen() {
                     onFocus={() => handleFieldFocus('tradeLicenseNumber')}
                     placeholder="e.g. 1029384 or CN-1294820"
                     placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                     autoCapitalize="characters"
                   />
                 </View>
@@ -1115,6 +1122,7 @@ export default function BusinessOnboardingScreen() {
                     onFocus={() => handleFieldFocus('address')}
                     placeholder={isRTL ? 'مثال: برج الخليج، الخليج التجاري، دبي' : 'e.g. Office 402, Business Bay, Dubai'}
                     placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 </View>
               </View>
@@ -1155,6 +1163,7 @@ export default function BusinessOnboardingScreen() {
                     }}
                     onFocus={() => handleFieldFocus('revenueAED')}
                     keyboardType="numeric"
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                     placeholder="e.g. 1500000"
                     placeholderTextColor={colors.neutral.textTertiary}
                   />
@@ -1170,8 +1179,8 @@ export default function BusinessOnboardingScreen() {
                   style={[
                     styles.taxPostureBadge,
                     {
-                      backgroundColor: parsedRevenue > 0 && isSbrEligible ? colors.semantic.successBg : parsedRevenue > 0 ? '#F0F9FF' : '#F9FAFB',
-                      borderColor: parsedRevenue > 0 && isSbrEligible ? colors.semantic.successBorder : parsedRevenue > 0 ? '#BAE6FD' : '#E5E7EB',
+                      backgroundColor: parsedRevenue > 0 && isSbrEligible ? colors.semantic.successBg : parsedRevenue > 0 ? colors.semantic.infoBg : colors.neutral.surfaceSubdued,
+                      borderColor: parsedRevenue > 0 && isSbrEligible ? colors.semantic.successBorder : parsedRevenue > 0 ? colors.semantic.infoBorder : colors.neutral.border,
                     },
                   ]}
                 >
@@ -1184,7 +1193,7 @@ export default function BusinessOnboardingScreen() {
                     <Text
                       style={[
                         styles.taxPostureTitle,
-                        { color: parsedRevenue > 0 && isSbrEligible ? colors.semantic.successDark : parsedRevenue > 0 ? '#0369A1' : colors.neutral.textPrimary },
+                        { color: parsedRevenue > 0 && isSbrEligible ? colors.semantic.successText : parsedRevenue > 0 ? colors.semantic.infoText : colors.neutral.textPrimary },
                         { textAlign: isRTL ? 'right' : 'left' },
                       ]}
                     >
@@ -1272,6 +1281,7 @@ export default function BusinessOnboardingScreen() {
                       }}
                       onFocus={() => handleFieldFocus('vatTrn')}
                       keyboardType="numeric"
+                      keyboardAppearance={isDark ? 'dark' : 'light'}
                       maxLength={15}
                       placeholder="100XXXXXXXX0003"
                       placeholderTextColor={colors.neutral.textTertiary}
@@ -1335,6 +1345,7 @@ export default function BusinessOnboardingScreen() {
                       }}
                       onFocus={() => handleFieldFocus('corporateTaxTrn')}
                       keyboardType="numeric"
+                      keyboardAppearance={isDark ? 'dark' : 'light'}
                       maxLength={15}
                       placeholder="e.g. 100123456789003"
                       placeholderTextColor={colors.neutral.textTertiary}
@@ -1407,7 +1418,7 @@ export default function BusinessOnboardingScreen() {
                 <Ionicons
                   name={isRTL ? 'arrow-back' : 'arrow-forward'}
                   size={18}
-                  color="#FFF"
+                  color={colors.neutral.onPrimary}
                 />
               </TouchableOpacity>
             ) : (
@@ -1418,10 +1429,10 @@ export default function BusinessOnboardingScreen() {
                 activeOpacity={0.85}
               >
                 {isSubmitting ? (
-                  <ActivityIndicator color="#FFF" size="small" />
+                  <ActivityIndicator color={colors.neutral.onPrimary} size="small" />
                 ) : (
                   <>
-                    <Ionicons name="checkmark-done-circle" size={20} color="#FFF" />
+                    <Ionicons name="checkmark-done-circle" size={20} color={colors.neutral.onPrimary} />
                     <Text style={styles.primaryButtonText}>
                       {isRTL ? 'تسجيل المنشأة والدخول' : 'Register Business & Enter'}
                     </Text>
@@ -1438,7 +1449,8 @@ export default function BusinessOnboardingScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic theme-aware stylesheet factory for BusinessOnboardingScreen
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -1472,14 +1484,14 @@ const styles = StyleSheet.create({
   logoSlantBar1: {
     width: 4,
     height: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.onPrimary,
     borderRadius: 2,
     transform: [{ skewX: '-15deg' }],
   },
   logoSlantBar2: {
     width: 4,
     height: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.onPrimary,
     borderRadius: 2,
     transform: [{ skewX: '-15deg' }],
   },
@@ -1520,7 +1532,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: radii.full,
     borderWidth: 1,
-    borderColor: '#FED7AA',
+    borderColor: colors.brand.blushAlt,
     gap: 6,
   },
   requiredBadgeText: {
@@ -1579,7 +1591,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textSecondary,
   },
   stepNumberTextActive: {
-    color: '#FFF',
+    color: colors.neutral.onPrimary,
   },
   stepLabelText: {
     fontSize: 11,
@@ -1643,7 +1655,7 @@ const styles = StyleSheet.create({
   },
   inputContainerError: {
     borderColor: colors.semantic.risk,
-    backgroundColor: '#FFF8F8',
+    backgroundColor: colors.semantic.riskBg,
     borderWidth: 1.5,
   },
   inlineErrorText: {
@@ -1783,7 +1795,7 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
   },
   buttonDisabled: {
     opacity: 0.6,
@@ -1803,7 +1815,7 @@ const styles = StyleSheet.create({
   },
   methodCardRecommended: {
     borderColor: colors.brand.primary,
-    backgroundColor: '#FFFDF9',
+    backgroundColor: colors.brand.blushSoft,
   },
   methodCardTopRow: {
     flexDirection: 'row',
@@ -1815,21 +1827,21 @@ const styles = StyleSheet.create({
     width: 46,
     height: 46,
     borderRadius: 23,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: colors.neutral.surfaceInset,
     alignItems: 'center',
     justifyContent: 'center',
   },
   methodIconCirclePrimary: {
-    backgroundColor: '#FEF3C7',
+    backgroundColor: colors.semantic.warningBg,
   },
   methodBadge: {
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: colors.neutral.surfaceInset,
   },
   methodBadgePrimary: {
-    backgroundColor: '#FDE68A',
+    backgroundColor: colors.semantic.warningBg,
   },
   methodBadgeText: {
     fontSize: 11,
@@ -1837,7 +1849,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textSecondary,
   },
   methodBadgeTextPrimary: {
-    color: '#92400E',
+    color: colors.semantic.warningText,
   },
   methodTitle: {
     fontSize: 16,
@@ -1868,12 +1880,12 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: 8,
     paddingHorizontal: 12,
-    backgroundColor: '#FFF7ED',
+    backgroundColor: colors.brand.primaryMuted,
     borderRadius: radii.md,
     marginBottom: spacing.md,
     alignSelf: 'flex-start',
     borderWidth: 1,
-    borderColor: '#FED7AA',
+    borderColor: colors.brand.blushAlt,
   },
   backToMethodsText: {
     fontSize: 13,
@@ -1884,9 +1896,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#ECFDF5',
+    backgroundColor: colors.semantic.successBg,
     borderWidth: 1,
-    borderColor: '#A7F3D0',
+    borderColor: colors.semantic.successBorder,
     borderRadius: radii.md,
     padding: spacing.md,
     marginBottom: spacing.md,
@@ -1894,7 +1906,7 @@ const styles = StyleSheet.create({
   ocrSuccessBannerText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#065F46',
+    color: colors.semantic.successText,
     flex: 1,
   },
   ocrLoadingCard: {
@@ -1926,7 +1938,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: colors.neutral.surfaceSubdued,
     borderWidth: 1,
     borderColor: colors.neutral.border,
     borderRadius: radii.md,

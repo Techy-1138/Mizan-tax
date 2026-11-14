@@ -21,6 +21,7 @@ firebase-*.json
 trade-license*.pdf
 
 # Build Artifacts
+.b/
 dist/
 */dist/
 build/

@@ -193,8 +193,14 @@ export class VatAssessmentService {
       const hasAttachment = !!exp.documentId;
       const hasValidTrn = !!exp.supplierTrn && exp.supplierTrn.trim().length === 15;
 
-      // Determine Category flags
-      const isEntertainment = exp.category === 'ENTERTAINMENT' || exp.category === 'CLIENT_ENTERTAINMENT';
+      // Determine Category flags with Article 53 Cabinet Decision No. (52) of 2017 compliance:
+      // Input tax incurred on entertainment services provided to anyone who is not an employee is fully blocked from recovery.
+      const isEntertainment =
+        exp.category === 'ENTERTAINMENT' ||
+        exp.category === 'CLIENT_ENTERTAINMENT' ||
+        exp.category === 'MEALS_ENTERTAINMENT' ||
+        (exp as any).isEntertainmentSplit ||
+        (exp.notes && exp.notes.includes('Article 32 Entertainment 50% split'));
       const isVehicle = exp.category === 'VEHICLE_EXPENSES';
       const isEmployee = exp.category === 'EMPLOYEE_EXPENSES';
 

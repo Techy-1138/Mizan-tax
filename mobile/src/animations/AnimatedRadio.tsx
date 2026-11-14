@@ -17,9 +17,10 @@ import Animated, {
   interpolateColor,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { colors } from '../theme/tokens';
+import { useTheme } from '../context/ThemeContext';
 import { motionSprings } from './easings';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
+import { AppPreferences } from '../utils/preferences';
 
 export interface AnimatedRadioProps {
   selected: boolean;
@@ -38,6 +39,7 @@ export const AnimatedRadio: React.FC<AnimatedRadioProps> = ({
   style,
   accessibilityLabel,
 }) => {
+  const { colors } = useTheme();
   const isReducedMotion = useReduceMotionPreference();
   const progress = useSharedValue<number>(selected ? 1 : 0);
   const dotScale = useSharedValue<number>(selected ? 1 : 0);
@@ -63,7 +65,7 @@ export const AnimatedRadio: React.FC<AnimatedRadioProps> = ({
     return {
       borderColor,
     };
-  });
+  }, [colors.neutral.borderStrong, colors.brand.primary]);
 
   const animatedDotStyle = useAnimatedStyle(() => {
     return {
@@ -74,7 +76,7 @@ export const AnimatedRadio: React.FC<AnimatedRadioProps> = ({
 
   const handlePress = () => {
     if (disabled || !onSelect) return;
-    Haptics.selectionAsync().catch(() => {});
+    AppPreferences.selection();
     onSelect();
   };
 

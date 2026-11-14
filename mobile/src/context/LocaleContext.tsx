@@ -6,6 +6,7 @@ import React, { createContext, useContext, useState, ReactNode } from 'react';
 import { I18nManager } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Locale, translations, TranslationSchema } from '../i18n/translations';
+import { AppPreferences } from '../utils/preferences';
 
 interface LocaleContextType {
   locale: Locale;
@@ -22,7 +23,7 @@ export const LocaleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const setLocale = (newLocale: Locale) => {
     setLocaleState(newLocale);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
     const shouldBeRTL = newLocale === 'ar';
     if (I18nManager.isRTL !== shouldBeRTL) {
       I18nManager.allowRTL(shouldBeRTL);

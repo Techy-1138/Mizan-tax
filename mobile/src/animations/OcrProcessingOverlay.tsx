@@ -17,10 +17,12 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors } from '../theme/tokens';
+import { ThemeColors } from '../theme/tokens';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { motionDurations } from './motionTokens';
 import { motionEasings } from './easings';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
+import { AppPreferences } from '../utils/preferences';
 
 export interface OcrProcessingOverlayProps {
   visible: boolean;
@@ -41,6 +43,8 @@ export const OcrProcessingOverlay: React.FC<OcrProcessingOverlayProps> = ({
   onComplete,
   documentType = 'licence',
 }) => {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const isReducedMotion = useReduceMotionPreference();
   const [currentStage, setCurrentStage] = useState(1);
   const progressSweep = useSharedValue<number>(0);
@@ -77,10 +81,10 @@ export const OcrProcessingOverlay: React.FC<OcrProcessingOverlayProps> = ({
       if (idx > 0) {
         const timeout = setTimeout(() => {
           setCurrentStage(stage.id);
-          Haptics.selectionAsync().catch(() => {});
+          AppPreferences.selection();
           if (idx === OCR_STAGES.length - 1) {
             setTimeout(() => {
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+              AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
               onComplete?.();
             }, 300);
           }
@@ -108,7 +112,13 @@ export const OcrProcessingOverlay: React.FC<OcrProcessingOverlayProps> = ({
   if (!visible) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="fade">
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent={true}
+      hardwareAccelerated={true}
+    >
       <View style={styles.backdrop}>
         <Animated.View entering={FadeIn.duration(motionDurations.tab)} style={styles.card}>
           {/* Header Icon with Cyan Glow */}
@@ -168,99 +178,102 @@ export const OcrProcessingOverlay: React.FC<OcrProcessingOverlayProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(20, 20, 22, 0.72)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 340,
-    backgroundColor: colors.neutral.surface,
-    borderRadius: 16,
-    padding: 24,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 10,
-  },
-  iconCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#FFF3ED',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  title: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 12,
-    color: colors.neutral.textSecondary,
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  progressTrack: {
-    width: '100%',
-    height: 4,
-    backgroundColor: colors.neutral.border,
-    borderRadius: 2,
-    overflow: 'hidden',
-    marginBottom: 16,
-  },
-  progressSweep: {
-    width: 80,
-    height: '100%',
-    backgroundColor: colors.brand.primary,
-    borderRadius: 2,
-  },
-  stageList: {
-    width: '100%',
-    gap: 10,
-  },
-  stageRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  stageIconCol: {
-    width: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  pulseDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: colors.brand.primary,
-  },
-  pendingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.neutral.borderStrong,
-  },
-  stageText: {
-    fontSize: 12,
-    color: colors.neutral.textTertiary,
-  },
-  stageTextCurrent: {
-    color: colors.neutral.textPrimary,
-    fontWeight: '600',
-  },
-  stageTextPast: {
-    color: colors.semantic.successDark,
-    fontWeight: '500',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    backdrop: {
+      flex: 1,
+      backgroundColor: colors.neutral.scrim,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    },
+    card: {
+      width: '100%',
+      maxWidth: 340,
+      backgroundColor: colors.neutral.surface,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+      padding: 24,
+      alignItems: 'center',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.25,
+      shadowRadius: 16,
+      elevation: 10,
+    },
+    iconCircle: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: colors.brand.primaryMuted,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginBottom: 12,
+    },
+    title: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: colors.neutral.textPrimary,
+      marginBottom: 4,
+      textAlign: 'center',
+    },
+    subtitle: {
+      fontSize: 12,
+      color: colors.neutral.textSecondary,
+      marginBottom: 16,
+      textAlign: 'center',
+    },
+    progressTrack: {
+      width: '100%',
+      height: 4,
+      backgroundColor: colors.neutral.border,
+      borderRadius: 2,
+      overflow: 'hidden',
+      marginBottom: 16,
+    },
+    progressSweep: {
+      width: 80,
+      height: '100%',
+      backgroundColor: colors.brand.primary,
+      borderRadius: 2,
+    },
+    stageList: {
+      width: '100%',
+      gap: 10,
+    },
+    stageRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    stageIconCol: {
+      width: 24,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 8,
+    },
+    pulseDot: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: colors.brand.primary,
+    },
+    pendingDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: colors.neutral.borderStrong,
+    },
+    stageText: {
+      fontSize: 12,
+      color: colors.neutral.textTertiary,
+    },
+    stageTextCurrent: {
+      color: colors.neutral.textPrimary,
+      fontWeight: '600',
+    },
+    stageTextPast: {
+      color: colors.semantic.successText,
+      fontWeight: '500',
+    },
+  });

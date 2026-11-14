@@ -37,11 +37,17 @@ if (!process.env.ANDROID_HOME) {
 console.log(`[Env] JAVA_HOME:    ${process.env.JAVA_HOME}`);
 console.log(`[Env] ANDROID_HOME: ${process.env.ANDROID_HOME}`);
 
-// 2. Ensure Staging Directories
-const stagingDir = 'C:\\c';
-const reanimatedStagingDir = 'C:\\c\\rea';
-if (!fs.existsSync(stagingDir)) fs.mkdirSync(stagingDir, { recursive: true });
-if (!fs.existsSync(reanimatedStagingDir)) fs.mkdirSync(reanimatedStagingDir, { recursive: true });
+// 2. Workspace Check
+console.log(`[Workspace] Root: ${projectRootDir}`);
+console.log(`[Workspace] Android: ${androidDir}`);
+
+// Ensure in-workspace short staging directory exists (.b) to prevent Windows MAX_PATH (>260 char) CMake failures
+const workspaceStagingDir = path.join(projectRootDir, '.b');
+const appStagingDir = path.join(workspaceStagingDir, 'app');
+const reaStagingDir = path.join(workspaceStagingDir, 'rea');
+if (!fs.existsSync(appStagingDir)) fs.mkdirSync(appStagingDir, { recursive: true });
+if (!fs.existsSync(reaStagingDir)) fs.mkdirSync(reaStagingDir, { recursive: true });
+console.log(`[Workspace] Staging (In-Workspace): ${workspaceStagingDir}`);
 
 // 3. Run Prebuild if needed or requested
 const shouldPrebuild = process.argv.includes('--prebuild') || !fs.existsSync(path.join(androidDir, 'build.gradle'));
@@ -53,27 +59,49 @@ if (shouldPrebuild) {
     env: process.env,
   });
 } else {
-  console.log('\n[Step 1/4] Using prebuilt android directory...');
+  console.log('\n[Step 1/4] Using prebuilt android directory strictly in workspace...');
 }
 
-// 4. Apply Windows Path Length & Compatibility Patches
+// 4. Apply Windows Compatibility & Native Module Patches
 console.log('\n[Step 2/4] Applying Windows compatibility & build patches...');
 
-// 4.1 Patch android/app/build.gradle with buildStagingDirectory
+// 4.1 Patch android/app/build.gradle with in-workspace buildStagingDirectory
 const appBuildGradlePath = path.join(androidDir, 'app', 'build.gradle');
 if (fs.existsSync(appBuildGradlePath)) {
   let content = fs.readFileSync(appBuildGradlePath, 'utf8');
-  if (!content.includes('buildStagingDirectory file("C:/c")')) {
-    content = content.replace(
-      'android {',
-      'android {\n    externalNativeBuild {\n        cmake {\n            buildStagingDirectory file("C:/c")\n        }\n    }'
-    );
+  if (!content.includes('buildStagingDirectory file("${rootDir}/../../.b/app")')) {
+    if (content.includes('buildStagingDirectory')) {
+      content = content.replace(/buildStagingDirectory.*/g, 'buildStagingDirectory file("${rootDir}/../../.b/app")');
+    } else {
+      content = content.replace(
+        'android {',
+        'android {\n    externalNativeBuild {\n        cmake {\n            buildStagingDirectory file("${rootDir}/../../.b/app")\n        }\n    }'
+      );
+    }
     fs.writeFileSync(appBuildGradlePath, content, 'utf8');
-    console.log('  ✔ Injected C:/c staging directory into android/app/build.gradle');
+    console.log('  ✔ Injected in-workspace .b/app staging directory into android/app/build.gradle');
   }
 }
 
-// 4.2 Patch android/gradle.properties: disable minify to prevent runtime crashes in testing APK
+// 4.2 Patch react-native-reanimated build.gradle.kts with in-workspace buildStagingDirectory
+const reaBuildGradle = path.join(mobileDir, 'node_modules', 'react-native-reanimated', 'android', 'build.gradle.kts');
+if (fs.existsSync(reaBuildGradle)) {
+  let reaContent = fs.readFileSync(reaBuildGradle, 'utf8');
+  if (!reaContent.includes('buildStagingDirectory = file("${rootProject.projectDir}/../../.b/rea")')) {
+    if (reaContent.includes('buildStagingDirectory')) {
+      reaContent = reaContent.replace(/buildStagingDirectory = .*/g, 'buildStagingDirectory = file("${rootProject.projectDir}/../../.b/rea")');
+    } else {
+      reaContent = reaContent.replace(
+        'path = file("CMakeLists.txt")',
+        'path = file("CMakeLists.txt")\n            buildStagingDirectory = file("${rootProject.projectDir}/../../.b/rea")'
+      );
+    }
+    fs.writeFileSync(reaBuildGradle, reaContent, 'utf8');
+    console.log('  ✔ Injected in-workspace .b/rea staging directory into react-native-reanimated');
+  }
+}
+
+// 4.3 Patch android/gradle.properties: disable minify to prevent runtime crashes in testing APK
 const gradlePropsPath = path.join(androidDir, 'gradle.properties');
 if (fs.existsSync(gradlePropsPath)) {
   let props = fs.readFileSync(gradlePropsPath, 'utf8');
@@ -81,20 +109,6 @@ if (fs.existsSync(gradlePropsPath)) {
     props = props.replace('android.enableMinifyInReleaseBuilds=true', 'android.enableMinifyInReleaseBuilds=false');
     fs.writeFileSync(gradlePropsPath, props, 'utf8');
     console.log('  ✔ Disabled R8 minification in gradle.properties for reliable test execution');
-  }
-}
-
-// 4.3 Patch react-native-reanimated build.gradle.kts
-const reaBuildGradle = path.join(mobileDir, 'node_modules', 'react-native-reanimated', 'android', 'build.gradle.kts');
-if (fs.existsSync(reaBuildGradle)) {
-  let reaContent = fs.readFileSync(reaBuildGradle, 'utf8');
-  if (!reaContent.includes('buildStagingDirectory = file("C:/c/rea")')) {
-    reaContent = reaContent.replace(
-      'path = file("CMakeLists.txt")',
-      'path = file("CMakeLists.txt")\n            buildStagingDirectory = file("C:/c/rea")'
-    );
-    fs.writeFileSync(reaBuildGradle, reaContent, 'utf8');
-    console.log('  ✔ Injected C:/c/rea staging directory into react-native-reanimated');
   }
 }
 
@@ -288,6 +302,117 @@ endif()
   console.log('  ✔ Applied flattened path CMakeLists to react-native-screens');
 }
 
+// 4.6.1 Patch react-native-reanimated codegen CMakeLists to flatten paths
+const reaCodegenCmake = path.join(mobileDir, 'node_modules', 'react-native-reanimated', 'android', 'build', 'generated', 'source', 'codegen', 'jni', 'CMakeLists.txt');
+if (fs.existsSync(reaCodegenCmake)) {
+  let content = fs.readFileSync(reaCodegenCmake, 'utf8');
+  if (!content.includes('_raw_codegen_SRCS')) {
+    content = `cmake_minimum_required(VERSION 3.13)
+set(CMAKE_VERBOSE_MAKEFILE on)
+
+file(GLOB _raw_codegen_SRCS CONFIGURE_DEPENDS *.cpp react/renderer/components/rnreanimated/*.cpp)
+
+set(react_codegen_SRCS)
+foreach(src_file \${_raw_codegen_SRCS})
+  get_filename_component(src_name \${src_file} NAME)
+  configure_file(\${src_file} \${CMAKE_CURRENT_BINARY_DIR}/\${src_name} COPYONLY)
+  list(APPEND react_codegen_SRCS \${CMAKE_CURRENT_BINARY_DIR}/\${src_name})
+endforeach()
+
+add_library(
+  react_codegen_rnreanimated
+  OBJECT
+  \${react_codegen_SRCS}
+)
+
+target_include_directories(react_codegen_rnreanimated PUBLIC . react/renderer/components/rnreanimated \${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+  react_codegen_rnreanimated
+  fbjni
+  jsi
+  reactnative
+)
+
+target_compile_reactnative_options(react_codegen_rnreanimated PRIVATE)
+`;
+    fs.writeFileSync(reaCodegenCmake, content, 'utf8');
+    console.log('  ✔ Applied flattened path CMakeLists to react-native-reanimated codegen');
+  }
+}
+
+// 4.6.2 Patch react-native-reanimated Common/NativeView/CMakeLists.txt to flatten paths
+const reaNativeViewCmake = path.join(mobileDir, 'node_modules', 'react-native-reanimated', 'Common', 'NativeView', 'CMakeLists.txt');
+if (fs.existsSync(reaNativeViewCmake)) {
+  let nvContent = fs.readFileSync(reaNativeViewCmake, 'utf8');
+  if (!nvContent.includes('ALL_CODEGEN_SRCS')) {
+    nvContent = `cmake_minimum_required(VERSION 3.13)
+set(CMAKE_VERBOSE_MAKEFILE on)
+
+set(ANDROID_DIR \${CMAKE_CURRENT_SOURCE_DIR}/../../android)
+set(CODEGEN_JNI_DIR \${ANDROID_DIR}/build/generated/source/codegen/jni)
+set(CODEGEN_COMPONENTS_DIR \${CODEGEN_JNI_DIR}/react/renderer/components/rnreanimated)
+file(
+  GLOB CODEGEN_ORIGINAL_SRCS CONFIGURE_DEPENDS
+  \${CODEGEN_JNI_DIR}/*.cpp
+  \${CODEGEN_COMPONENTS_DIR}/*.cpp
+)
+
+set(CODEGEN_OVERWRITTEN_JNI_DIR .)
+set(CODEGEN_OVERWRITTEN_COMPONENTS_DIR \${CODEGEN_OVERWRITTEN_JNI_DIR}/react/renderer/components/rnreanimated)
+file(
+  GLOB CODEGEN_OVERWRITTEN_SRCS CONFIGURE_DEPENDS
+  \${CODEGEN_OVERWRITTEN_JNI_DIR}/*.cpp
+  \${CODEGEN_OVERWRITTEN_COMPONENTS_DIR}/*.cpp
+)
+
+set(ALL_CODEGEN_SRCS)
+foreach(src_file \${CODEGEN_ORIGINAL_SRCS} \${CODEGEN_OVERWRITTEN_SRCS})
+  get_filename_component(src_name \${src_file} NAME)
+  configure_file(\${src_file} \${CMAKE_CURRENT_BINARY_DIR}/\${src_name} COPYONLY)
+  list(APPEND ALL_CODEGEN_SRCS \${CMAKE_CURRENT_BINARY_DIR}/\${src_name})
+endforeach()
+
+add_library(
+  react_codegen_rnreanimated
+  OBJECT
+  \${ALL_CODEGEN_SRCS}
+)
+
+target_compile_reactnative_options(react_codegen_rnreanimated PRIVATE)
+
+target_include_directories(
+  react_codegen_rnreanimated
+  PUBLIC
+  \${CMAKE_CURRENT_BINARY_DIR}
+  \${CODEGEN_OVERWRITTEN_JNI_DIR}
+  \${CODEGEN_OVERWRITTEN_COMPONENTS_DIR}
+  \${CODEGEN_JNI_DIR}
+  \${CODEGEN_COMPONENTS_DIR}
+)
+
+target_link_libraries(
+  react_codegen_rnreanimated
+  fbjni
+  jsi
+  reactnative
+)
+
+target_compile_options(
+  react_codegen_rnreanimated
+  PRIVATE
+  -DLOG_TAG=\\"ReactNative\\"
+  -fexceptions
+  -frtti
+  -std=c++20
+  -Wall
+)
+`;
+    fs.writeFileSync(reaNativeViewCmake, nvContent, 'utf8');
+    console.log('  ✔ Applied flattened path CMakeLists to react-native-reanimated Common/NativeView');
+  }
+}
+
 // 4.7 Patch react-native-safe-area-context codegen ComponentDescriptors
 const rnsacBuildGradle = path.join(mobileDir, 'node_modules', 'react-native-safe-area-context', 'android', 'build.gradle');
 if (fs.existsSync(rnsacBuildGradle)) {
@@ -454,10 +579,10 @@ const SafeAreaView = exports.SafeAreaView = /*#__PURE__*/React.forwardRef(({
   console.log('  ✔ Injected pure JS SafeAreaView implementations (src, module, commonjs)');
 }
 
-// 5. Run Gradle AssembleRelease
-console.log('\n[Step 3/4] Assembling Release APK with Gradle...');
+// 5. Run Gradle AssembleRelease with parallel speed flags & test/lint skips
+console.log('\n[Step 3/4] Assembling Release APK with Gradle (Fastest mode: --parallel --build-cache -x lint -x test)...');
 const gradlewCmd = process.platform === 'win32' ? '.\\gradlew.bat' : './gradlew';
-execSync(`${gradlewCmd} assembleRelease`, {
+execSync(`${gradlewCmd} assembleRelease -x lint -x test --parallel --build-cache`, {
   cwd: androidDir,
   stdio: 'inherit',
   env: process.env,

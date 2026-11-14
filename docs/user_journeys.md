@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart TD
-    START([User Opens Mobile App]) --> SPLASH[Root Gatekeeper: app/index.tsx]
+    START([User Opens Mobile App]) --> SPLASH[Root Gatekeeper, ThemeProvider & Typography Preloader: app/_layout.tsx]
     SPLASH --> CHECK_AUTH{Has Valid Session Token?}
 
     CHECK_AUTH -- No --> LOGIN[Login Screen: app/auth/login.tsx]
@@ -42,11 +42,28 @@ flowchart TD
     end
 
     subgraph Authenticated Product Surfaces
-        DASHBOARD --> BOOKS[Bookkeeping & Ledger]
-        DASHBOARD --> INVOICES[Bilingual Invoicing]
-        DASHBOARD --> TAX[Corporate Tax & VAT Filings]
-        DASHBOARD --> SCANNER[Trade License & OCR Scanner]
-        DASHBOARD --> PROFILE[Entity Switcher & Settings]
+        DASHBOARD --> BOOKS[Bookkeeping & Ledger: app/tabs/books.tsx]
+        DASHBOARD --> INVOICES[Bilingual Invoicing: app/tabs/invoices.tsx]
+        DASHBOARD --> TAX[Corporate Tax & VAT Filings: app/tabs/tax.tsx]
+        DASHBOARD --> SCANNER[Trade License & OCR Scanner: app/tabs/scan.tsx]
+        DASHBOARD --> PROFILE[Entity Switcher & Settings: app/tabs/profile.tsx]
+        DASHBOARD --> CT_TRACKER[CT Registration Tracker: FTA Dec 3/2024 Countdown]
+        DASHBOARD --> SYNC_STATUS[Sync Status Pill: Online/Offline Queue Flush]
+
+        INVOICES --> NEW_INV[New Tax Invoice: app/invoices/new.tsx]
+        NEW_INV --> TRN_VAL[Article 59 15-Digit TRN Real-Time Validation]
+        NEW_INV --> ITEM_PRESETS[Quick Templates: Consulting, Software, Legal, Export]
+
+        BOOKS --> BANK_IMPORT[Deterministic Bank CSV Importer: ENBD, ADCB, FAB, Wio]
+        BOOKS --> EXP_REVIEW[Review Expenses: app/expenses/review.tsx]
+        EXP_REVIEW --> CAT_MODAL[Expense Category Selector via SmoothModal]
+        EXP_REVIEW --> ENT_SPLIT[Art. 32 Entertainment 50% CT / Blocked VAT Toggle]
+
+        PROFILE --> EDIT_PROFILE[Dedicated Profile Settings: app/profile/edit.tsx]
+        PROFILE --> APPEARANCE[Appearance Setting via SmoothModal: System / Light / Dark]
+        APPEARANCE --> SPLASH
+        PROFILE --> DANGER_ZONE[Delete Business Entity: 2-Step Danger Zone Modal via SmoothModal]
+        CT_TRACKER --> TRN_MODAL[15-Digit TRN Verification: SmoothModal Spring Popup]
     end
 
     PROFILE -- Tap Logout --> LOGOUT[Clear Token & Active State]

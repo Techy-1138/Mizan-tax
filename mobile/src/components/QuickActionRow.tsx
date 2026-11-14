@@ -7,8 +7,10 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../theme/tokens';
+import { ThemeColors, radii, spacing } from '../theme/tokens';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { useLocale } from '../context/LocaleContext';
+import { AppPreferences } from '../utils/preferences';
 
 interface QuickActionRowProps {
   onScanLicence?: () => void;
@@ -31,6 +33,8 @@ export const QuickActionRow: React.FC<QuickActionRowProps> = ({
   onAskAi,
 }) => {
   const { t, isRTL } = useLocale();
+  const { colors, shadows } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const actions: ActionItem[] = [
     { id: 'licence', label: t.home.scanLicence, icon: 'document-text-outline', onPress: onScanLicence },
@@ -52,7 +56,7 @@ export const QuickActionRow: React.FC<QuickActionRowProps> = ({
             style={[styles.actionCard, shadows.card]}
             activeOpacity={0.75}
             onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
               act.onPress?.();
             }}
           >
@@ -69,48 +73,49 @@ export const QuickActionRow: React.FC<QuickActionRowProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.xl,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    marginBottom: spacing.md,
-  },
-  row: {
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  actionCard: {
-    flex: 1,
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.lg,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.xs,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-  },
-  iconContainer: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.brand.blushSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.xs + 2,
-    borderWidth: 1,
-    borderColor: colors.brand.blushAlt,
-  },
-  actionLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.neutral.textPrimary,
-    textAlign: 'center',
-    lineHeight: 16,
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: {
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.xl,
+    },
+    sectionTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: colors.neutral.textPrimary,
+      marginBottom: spacing.md,
+    },
+    row: {
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
+    actionCard: {
+      flex: 1,
+      backgroundColor: colors.neutral.surface,
+      borderRadius: radii.lg,
+      paddingVertical: spacing.md,
+      paddingHorizontal: spacing.xs,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+    },
+    iconContainer: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: colors.brand.blushSoft,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: spacing.xs + 2,
+      borderWidth: 1,
+      borderColor: colors.brand.blushAlt,
+    },
+    actionLabel: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.neutral.textPrimary,
+      textAlign: 'center',
+      lineHeight: 16,
+    },
+  });

@@ -16,7 +16,9 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from '../../src/components/SafeAreaView';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { AppPreferences } from '../../src/utils/preferences';
+import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { AnimatedRadio, AnimatedFinancialNumber, AnimatedProgressBar } from '../../src/animations';
@@ -28,6 +30,9 @@ export default function TaxReadinessAssessmentScreen() {
   const router = useRouter();
   const { isRTL } = useLocale();
   const { activeBusiness } = useBusiness();
+  // Resolve theme palette & dynamic styles for Light/Dark transitions
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const [stage, setStage] = useState<Stage>('intro');
   const [liveReadiness, setLiveReadiness] = useState<any>(null);
@@ -40,12 +45,12 @@ export default function TaxReadinessAssessmentScreen() {
   const [properBookkeeping, setProperBookkeeping] = useState<'Yes' | 'No' | 'Partially'>('Yes');
 
   const handleStart = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Medium);
     setStage('questions');
   };
 
   const handleCalculateResult = async () => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
     setStage('result');
     if (activeBusiness?.id) {
       try {
@@ -134,7 +139,7 @@ export default function TaxReadinessAssessmentScreen() {
             {/* 3 Value Proposition Cards */}
             <View style={styles.featureListCard}>
               <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: '#FFF3ED' }]}>
+                <View style={[styles.featureIconBox, { backgroundColor: colors.brand.primaryMuted }]}>
                   <Ionicons name="shield-checkmark-outline" size={20} color={colors.brand.primary} />
                 </View>
                 <View style={styles.featureTextCol}>
@@ -146,7 +151,7 @@ export default function TaxReadinessAssessmentScreen() {
               <View style={styles.itemDivider} />
 
               <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: '#F0FDF4' }]}>
+                <View style={[styles.featureIconBox, { backgroundColor: colors.semantic.successBg }]}>
                   <Ionicons name="layers-outline" size={20} color={colors.semantic.successDark} />
                 </View>
                 <View style={styles.featureTextCol}>
@@ -158,8 +163,8 @@ export default function TaxReadinessAssessmentScreen() {
               <View style={styles.itemDivider} />
 
               <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: '#FFFBEB' }]}>
-                  <Ionicons name="flash-outline" size={20} color="#D97706" />
+                <View style={[styles.featureIconBox, { backgroundColor: colors.semantic.warningBg }]}>
+                  <Ionicons name="flash-outline" size={20} color={colors.semantic.warning} />
                 </View>
                 <View style={styles.featureTextCol}>
                   <Text style={styles.featureTitle}>Get a clear action plan</Text>
@@ -221,7 +226,7 @@ export default function TaxReadinessAssessmentScreen() {
               <View style={styles.stepperRow}>
                 <View style={styles.stepCol}>
                   <View style={[styles.stepCircle, styles.stepCircleComplete]}>
-                    <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                    <Ionicons name="checkmark" size={12} color={colors.neutral.onPrimary} />
                   </View>
                   <Text style={styles.stepLabel}>Business</Text>
                 </View>
@@ -416,7 +421,7 @@ export default function TaxReadinessAssessmentScreen() {
                     <Ionicons
                       name={liveReadiness?.isAuditReady ? 'checkmark-circle' : 'alert-circle'}
                       size={14}
-                      color={liveReadiness?.isAuditReady ? colors.semantic.successDark : '#D97706'}
+                      color={liveReadiness?.isAuditReady ? colors.semantic.successDark : colors.semantic.warning}
                     />
                     <Text style={styles.scorePillText}>
                       {liveReadiness?.isAuditReady
@@ -480,7 +485,7 @@ export default function TaxReadinessAssessmentScreen() {
                       color:
                         liveReadiness?.categories?.find((c: any) => c.category === 'CORPORATE_TAX')?.score >= 80
                           ? colors.semantic.successDark
-                          : '#D97706',
+                          : colors.semantic.warning,
                     },
                   ]}
                 >
@@ -512,7 +517,7 @@ export default function TaxReadinessAssessmentScreen() {
                       color:
                         liveReadiness?.categories?.find((c: any) => c.category === 'VAT')?.score >= 80
                           ? colors.semantic.successDark
-                          : '#D97706',
+                          : colors.semantic.warning,
                     },
                   ]}
                 >
@@ -544,7 +549,7 @@ export default function TaxReadinessAssessmentScreen() {
                       color:
                         liveReadiness?.categories?.find((c: any) => c.category === 'BOOKKEEPING')?.score >= 70
                           ? colors.semantic.successDark
-                          : '#D97706',
+                          : colors.semantic.warning,
                     },
                   ]}
                 >
@@ -576,7 +581,7 @@ export default function TaxReadinessAssessmentScreen() {
                       color:
                         liveReadiness?.criticalBlockers?.length === 0
                           ? colors.semantic.successDark
-                          : '#D97706',
+                          : colors.semantic.warning,
                     },
                   ]}
                 >
@@ -598,8 +603,8 @@ export default function TaxReadinessAssessmentScreen() {
                 activeOpacity={0.7}
                 onPress={() => router.push('/scan/report')}
               >
-                <View style={[styles.findingIconSquare, { backgroundColor: '#FEF3C7' }]}>
-                  <Ionicons name="warning-outline" size={18} color="#D97706" />
+                <View style={[styles.findingIconSquare, { backgroundColor: colors.semantic.warningBg }]}>
+                  <Ionicons name="warning-outline" size={18} color={colors.semantic.warning} />
                 </View>
                 <View style={styles.findingTextCol}>
                   <Text style={styles.findingTitle}>VAT Return Filing</Text>
@@ -615,8 +620,8 @@ export default function TaxReadinessAssessmentScreen() {
                 activeOpacity={0.7}
                 onPress={() => router.push('/scan/report')}
               >
-                <View style={[styles.findingIconSquare, { backgroundColor: '#FEF3C7' }]}>
-                  <Ionicons name="warning-outline" size={18} color="#D97706" />
+                <View style={[styles.findingIconSquare, { backgroundColor: colors.semantic.warningBg }]}>
+                  <Ionicons name="warning-outline" size={18} color={colors.semantic.warning} />
                 </View>
                 <View style={styles.findingTextCol}>
                   <Text style={styles.findingTitle}>Missing Expense Records</Text>
@@ -632,7 +637,7 @@ export default function TaxReadinessAssessmentScreen() {
                 activeOpacity={0.7}
                 onPress={() => router.push('/(tabs)/tax')}
               >
-                <View style={[styles.findingIconSquare, { backgroundColor: '#ECFDF5' }]}>
+                <View style={[styles.findingIconSquare, { backgroundColor: colors.semantic.successBg }]}>
                   <Ionicons name="checkmark" size={18} color={colors.semantic.successDark} />
                 </View>
                 <View style={styles.findingTextCol}>
@@ -649,7 +654,7 @@ export default function TaxReadinessAssessmentScreen() {
                 activeOpacity={0.7}
                 onPress={() => router.push('/(tabs)/tax')}
               >
-                <View style={[styles.findingIconSquare, { backgroundColor: '#ECFDF5' }]}>
+                <View style={[styles.findingIconSquare, { backgroundColor: colors.semantic.successBg }]}>
                   <Ionicons name="checkmark" size={18} color={colors.semantic.successDark} />
                 </View>
                 <View style={styles.findingTextCol}>
@@ -693,7 +698,8 @@ export default function TaxReadinessAssessmentScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic theme-aware stylesheet factory for TaxReadinessAssessmentScreen
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -874,14 +880,14 @@ const styles = StyleSheet.create({
     ...shadows.pillButton,
   },
   primaryActionText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 16,
     fontWeight: '800',
   },
   aiFooterCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF8F5',
+    backgroundColor: colors.brand.blushSoft,
     borderRadius: radii.xl,
     padding: spacing.md,
     borderWidth: 1,
@@ -933,7 +939,7 @@ const styles = StyleSheet.create({
     borderColor: colors.neutral.border,
   },
   stepNumActive: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 11,
     fontWeight: '800',
   },
@@ -997,7 +1003,7 @@ const styles = StyleSheet.create({
   },
   revenuePillActive: {
     borderColor: colors.brand.primary,
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
   },
   revenuePillText: {
     fontSize: 12,
@@ -1029,7 +1035,7 @@ const styles = StyleSheet.create({
   },
   jurisdictionPillActive: {
     borderColor: colors.brand.primary,
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
   },
   choiceText: {
     fontSize: 11,
@@ -1080,6 +1086,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand.darkHero,
     borderRadius: radii.xl,
     padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.brand.darkHeroBorder,
     ...shadows.cardHover,
   },
   scoreHeaderRow: {
@@ -1106,7 +1114,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#DCFCE7',
+    backgroundColor: colors.semantic.successBg,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: radii.pill,
@@ -1115,7 +1123,7 @@ const styles = StyleSheet.create({
   scorePillText: {
     fontSize: 10,
     fontWeight: '700',
-    color: colors.semantic.successDark,
+    color: colors.semantic.successText,
   },
   donutGaugeBox: {
     width: 76,
@@ -1130,7 +1138,7 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 27,
-    backgroundColor: '#242528',
+    backgroundColor: colors.brand.darkHeroElevated,
     alignItems: 'center',
     justifyContent: 'center',
   },

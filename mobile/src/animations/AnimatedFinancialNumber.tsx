@@ -5,9 +5,10 @@
 // ============================================================================
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Text, TextStyle, StyleProp } from 'react-native';
+import { Text, TextStyle, StyleProp, StyleSheet } from 'react-native';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
 import { motionDurations } from './motionTokens';
+import { typography } from '../theme/tokens';
 
 export interface AnimatedFinancialNumberProps {
   /**
@@ -116,8 +117,27 @@ export const AnimatedFinancialNumber: React.FC<AnimatedFinancialNumberProps> = (
     return `${sign}${currPart}${formattedNum}`;
   };
 
+  // Sanitize style on Android to prevent Typeface fallback when fontWeight conflicts with TrueType cut
+  let sanitizedStyle: any = resolvedStyle;
+  if (resolvedStyle) {
+    const flat = StyleSheet.flatten(resolvedStyle);
+    if (flat && flat.fontWeight) {
+      const { fontWeight: _, ...rest } = flat;
+      sanitizedStyle = rest;
+    }
+  }
+
   return (
-    <Text style={[{ fontVariant: ['tabular-nums'] }, resolvedStyle]}>
+    <Text
+      style={[
+        {
+          fontFamily: typography.fontFamily.mono.medium,
+          includeFontPadding: false,
+          fontVariant: ['tabular-nums'],
+        },
+        sanitizedStyle,
+      ]}
+    >
       {prefix}{formatAmount(displayValue)}{suffix}
     </Text>
   );

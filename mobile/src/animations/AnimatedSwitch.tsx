@@ -18,9 +18,10 @@ import Animated, {
   interpolateColor,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { colors } from '../theme/tokens';
+import { useTheme } from '../context/ThemeContext';
 import { motionSprings } from './easings';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
+import { AppPreferences } from '../utils/preferences';
 
 export interface AnimatedSwitchProps {
   /**
@@ -67,19 +68,18 @@ export const AnimatedSwitch: React.FC<AnimatedSwitchProps> = ({
   value,
   onValueChange,
   disabled = false,
-  trackColor = {
-    false: colors.neutral.border,
-    true: colors.brand.primary,
-  },
-  thumbColor = '#FFFFFF',
+  trackColor,
+  thumbColor,
   style,
   accessibilityLabel,
 }) => {
+  const { colors } = useTheme();
   const isReducedMotion = useReduceMotionPreference();
   const progress = useSharedValue<number>(value ? 1 : 0);
 
-  const inactiveColor = trackColor.false || colors.neutral.border;
-  const activeColor = trackColor.true || colors.brand.primary;
+  const inactiveColor = trackColor?.false || colors.neutral.borderStrong;
+  const activeColor = trackColor?.true || colors.brand.primary;
+  const resolvedThumbColor = thumbColor || colors.neutral.onPrimary;
 
   useEffect(() => {
     const target = value ? 1 : 0;
@@ -90,6 +90,7 @@ export const AnimatedSwitch: React.FC<AnimatedSwitchProps> = ({
     }
   }, [value, isReducedMotion, progress]);
 
+  // Include color dependencies so Reanimated worklet updates immediately when theme switches
   const animatedTrackStyle = useAnimatedStyle(() => {
     const backgroundColor = interpolateColor(
       progress.value,
@@ -100,7 +101,7 @@ export const AnimatedSwitch: React.FC<AnimatedSwitchProps> = ({
     return {
       backgroundColor,
     };
-  });
+  }, [inactiveColor, activeColor]);
 
   const animatedThumbStyle = useAnimatedStyle(() => {
     const translateX = TRANSLATE_OFF + progress.value * (TRANSLATE_ON - TRANSLATE_OFF);
@@ -113,8 +114,8 @@ export const AnimatedSwitch: React.FC<AnimatedSwitchProps> = ({
   const handlePress = () => {
     if (disabled || !onValueChange) return;
 
-    // Trigger selective micro-haptic feedback on toggle
-    Haptics.selectionAsync().catch(() => {});
+    // Trigger selective micro-haptic feedback on toggle if enabled
+    AppPreferences.selection();
 
     onValueChange(!value);
   };
@@ -136,7 +137,7 @@ export const AnimatedSwitch: React.FC<AnimatedSwitchProps> = ({
         <Animated.View
           style={[
             styles.thumb,
-            { backgroundColor: thumbColor },
+            { backgroundColor: resolvedThumbColor },
             animatedThumbStyle,
           ]}
         />

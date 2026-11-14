@@ -18,9 +18,10 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors } from '../theme/tokens';
+import { useTheme } from '../context/ThemeContext';
 import { motionSprings } from './easings';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
+import { AppPreferences } from '../utils/preferences';
 
 export interface AnimatedCheckboxProps {
   checked: boolean;
@@ -39,6 +40,7 @@ export const AnimatedCheckbox: React.FC<AnimatedCheckboxProps> = ({
   style,
   accessibilityLabel,
 }) => {
+  const { colors } = useTheme();
   const isReducedMotion = useReduceMotionPreference();
   const progress = useSharedValue<number>(checked ? 1 : 0);
   const iconScale = useSharedValue<number>(checked ? 1 : 0);
@@ -71,7 +73,7 @@ export const AnimatedCheckbox: React.FC<AnimatedCheckboxProps> = ({
       backgroundColor,
       borderColor,
     };
-  });
+  }, [colors.brand.primary, colors.neutral.borderStrong]);
 
   const animatedIconStyle = useAnimatedStyle(() => {
     return {
@@ -82,7 +84,7 @@ export const AnimatedCheckbox: React.FC<AnimatedCheckboxProps> = ({
 
   const handlePress = () => {
     if (disabled || !onChange) return;
-    Haptics.selectionAsync().catch(() => {});
+    AppPreferences.selection();
     onChange(!checked);
   };
 

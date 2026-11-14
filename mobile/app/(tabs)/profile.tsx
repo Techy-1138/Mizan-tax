@@ -15,18 +15,21 @@ import {
   Modal,
   TextInput,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from '../../src/components/SafeAreaView';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { ThemeColors, ThemeMode, ThemeShadows, radii, spacing, fontStyles } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { AnimatedSwitch } from '../../src/animations';
 import { MizanApi } from '../../src/services/api';
 import { AppStorage } from '../../src/utils/storage';
 import { AppPreferences } from '../../src/utils/preferences';
+import { SmoothModal } from '../../src/components/SmoothModal';
 
 type BizSettingsTab = 'Business' | 'Tax & Compliance' | 'Integrations' | 'Team';
 type ActiveModalType =
@@ -36,7 +39,8 @@ type ActiveModalType =
   | 'security'
   | 'edit-biz-field'
   | 'invite-team'
-  | 'app-preferences';
+  | 'app-preferences'
+  | 'appearance';
 
 interface TeamMember {
   id: string;
@@ -51,7 +55,9 @@ const STORAGE_KEY_SECURITY_PREFS = 'mizan_security_prefs';
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { locale, toggleLocale, isRTL } = useLocale();
+  const { locale, toggleLocale, isRTL, t } = useLocale();
+  const { colors, isDark, themeMode, setThemeMode } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const {
     businesses,
     activeBusiness,
@@ -60,6 +66,7 @@ export default function ProfileScreen() {
     logout,
     refreshBusinesses,
     loadUserProfile,
+    deleteBusiness,
   } = useBusiness();
 
   const userInitials = currentUser?.fullName
@@ -285,6 +292,50 @@ export default function ProfileScreen() {
     AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
   };
 
+  const handleDeleteBusinessById = (bizId: string, bizName: string, licenseNo: string) => {
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Medium);
+
+    Alert.alert(
+      isRTL ? 'تأكيد حذف المنشأة التجارية' : 'Delete Business Entity?',
+      isRTL
+        ? `هل أنت متأكد من رغبتك في حذف "${bizName}" (${licenseNo})؟ لا يمكن التراجع عن هذا الإجراء وسيتم مسح السجلات الضريبية والفواتير المرتبطة بها.`
+        : `Are you sure you want to delete "${bizName}" (License: ${licenseNo})? This will permanently delete its tax records, invoices, and ledger entries.`,
+      [
+        { text: isRTL ? 'إلغاء' : 'Cancel', style: 'cancel' },
+        {
+          text: isRTL ? 'نعم، حذف نهائي' : 'Yes, Delete Entity',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setIsSaving(true);
+              await deleteBusiness(bizId);
+              setViewState('profile');
+              Alert.alert(
+                isRTL ? 'تم حذف المنشأة' : 'Business Deleted',
+                isRTL
+                  ? 'تم حذف المنشأة التجارية بنجاح من حسابك.'
+                  : 'The business entity has been successfully removed from your account.'
+              );
+            } catch (err: any) {
+              Alert.alert('Delete Failed', err?.message || 'Could not delete business entity.');
+            } finally {
+              setIsSaving(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDeleteActiveBusiness = () => {
+    if (!activeBusiness) return;
+    handleDeleteBusinessById(
+      activeBusiness.id,
+      activeBusiness.tradeName || activeBusiness.legalName,
+      activeBusiness.tradeLicenseNumber
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       {/* Top Header */}
@@ -358,20 +409,29 @@ export default function ProfileScreen() {
                 if (!currentUser) {
                   router.push('/auth/login');
                 } else {
-                  setActiveModal('account');
+                  router.push('/profile/edit' as any);
                 }
               }}
             >
               <View style={styles.avatarBig}>
-                <Text style={styles.avatarBigText}>{userInitials}</Text>
+                {currentUser?.profilePictureUrl ? (
+                  <Image source={{ uri: currentUser.profilePictureUrl }} style={styles.avatarBigImage} />
+                ) : (
+                  <Text style={styles.avatarBigText}>{userInitials}</Text>
+                )}
                 <View style={styles.avatarEditPencil}>
                   <Ionicons name="pencil" size={10} color="#FFFFFF" />
                 </View>
               </View>
               <View style={styles.userInfoCol}>
-                <Text style={styles.userName}>
-                  {currentUser?.fullName || (isRTL ? 'مؤسس الشركة' : 'Company Founder')}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <Text style={styles.userName}>
+                    {currentUser?.fullName || (isRTL ? 'مؤسس الشركة' : 'Company Founder')}
+                  </Text>
+                  {currentUser?.username ? (
+                    <Text style={styles.userHandleBadge}>@{currentUser.username}</Text>
+                  ) : null}
+                </View>
                 <Text style={styles.userEmail}>
                   {currentUser?.email || (isRTL ? 'اضغط لتسجيل الدخول' : 'Tap to sign in')}
                 </Text>
@@ -447,7 +507,7 @@ export default function ProfileScreen() {
                     <View
                       style={[
                         styles.bizIconSquare,
-                        isFreeZone ? { backgroundColor: '#F0F9FF' } : undefined,
+                        isFreeZone ? { backgroundColor: colors.semantic.infoBg } : undefined,
                       ]}
                     >
                       <Ionicons
@@ -459,7 +519,7 @@ export default function ProfileScreen() {
                             : 'business'
                         }
                         size={20}
-                        color={isFreeZone ? '#0284C7' : colors.brand.primary}
+                        color={isFreeZone ? colors.semantic.info : colors.brand.primary}
                       />
                     </View>
                     <View style={styles.bizInfoCol}>
@@ -477,18 +537,33 @@ export default function ProfileScreen() {
                         License: {biz.tradeLicenseNumber} • {biz.emirate || 'Dubai'}
                       </Text>
                     </View>
-                    <TouchableOpacity
-                      style={styles.manageBizPill}
-                      onPress={() => {
-                        setActiveBusinessId(biz.id);
-                        setViewState('business-settings');
-                      }}
-                    >
-                      <Ionicons name="options-outline" size={14} color={colors.brand.primary} />
-                      <Text style={styles.manageBizPillText}>
-                        {isRTL ? 'إعدادات' : 'Manage'}
-                      </Text>
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <TouchableOpacity
+                        style={styles.manageBizPill}
+                        onPress={() => {
+                          setActiveBusinessId(biz.id);
+                          setViewState('business-settings');
+                        }}
+                      >
+                        <Ionicons name="options-outline" size={14} color={colors.brand.primary} />
+                        <Text style={styles.manageBizPillText}>
+                          {isRTL ? 'إعدادات' : 'Manage'}
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.deleteBizSmallBtn}
+                        onPress={() =>
+                          handleDeleteBusinessById(
+                            biz.id,
+                            biz.tradeName || biz.legalName,
+                            biz.tradeLicenseNumber
+                          )
+                        }
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="trash-outline" size={14} color={colors.semantic.risk} />
+                      </TouchableOpacity>
+                    </View>
                   </TouchableOpacity>
                 );
               })
@@ -499,17 +574,48 @@ export default function ProfileScreen() {
               <TouchableOpacity
                 style={styles.settingsRow}
                 activeOpacity={0.7}
-                onPress={() => setActiveModal('account')}
+                onPress={() => router.push('/profile/edit' as any)}
               >
                 <View style={styles.settingIconSquare}>
-                  <Ionicons name="settings-outline" size={18} color={colors.neutral.textPrimary} />
+                  <Ionicons name="settings-outline" size={18} color={colors.brand.primary} />
                 </View>
                 <View style={styles.settingTextCol}>
                   <Text style={styles.settingTitle}>
-                    {isRTL ? 'إعدادات الحساب' : 'Account Settings'}
+                    {isRTL ? 'إعدادات الحساب والملف الشخصي' : 'Account & Profile Settings'}
                   </Text>
                   <Text style={styles.settingDesc}>
-                    {isRTL ? 'الاسم، البريد الإلكتروني، الهاتف، المؤسسة' : 'Name, email, phone, organisation'}
+                    {isRTL
+                      ? 'تعديل الصورة، اسم المستخدم، البريد، الهاتف، المؤسسة'
+                      : 'Custom photo, username handle, contact info & organisation'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={colors.neutral.textTertiary} />
+              </TouchableOpacity>
+
+              <View style={styles.itemDivider} />
+
+              <TouchableOpacity
+                style={styles.settingsRow}
+                activeOpacity={0.7}
+                onPress={() => setActiveModal('appearance')}
+              >
+                <View style={styles.settingIconSquare}>
+                  <Ionicons
+                    name={isDark ? 'moon-outline' : 'sunny-outline'}
+                    size={18}
+                    color={colors.brand.primary}
+                  />
+                </View>
+                <View style={styles.settingTextCol}>
+                  <Text style={styles.settingTitle}>
+                    {t.profile.appearance}
+                  </Text>
+                  <Text style={styles.settingDesc}>
+                    {themeMode === 'system'
+                      ? `${t.profile.themeSystem} (${isDark ? t.profile.themeDark : t.profile.themeLight})`
+                      : themeMode === 'dark'
+                      ? t.profile.themeDark
+                      : t.profile.themeLight}
                   </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={16} color={colors.neutral.textTertiary} />
@@ -915,6 +1021,39 @@ export default function ProfileScreen() {
                     />
                   </View>
                 </View>
+
+                {/* Danger Zone: Delete Business Entity */}
+                <View style={[styles.detailsGroupHeader, { marginTop: spacing.xl }]}>
+                  <Ionicons name="warning-outline" size={18} color={colors.semantic.risk} />
+                  <Text style={[styles.detailsGroupTitle, { color: colors.semantic.risk }]}>
+                    {isRTL ? 'منطقة الحذف والإنهاء' : 'Entity Management & Danger Zone'}
+                  </Text>
+                </View>
+
+                <View style={[styles.settingsGroupCard, { borderColor: colors.semantic.riskBorder }]}>
+                  <View style={{ padding: spacing.md, gap: 10 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: colors.neutral.textPrimary }}>
+                      {isRTL ? 'حذف هذه المنشأة التجارية' : 'Delete Business Entity'}
+                    </Text>
+                    <Text style={{ fontSize: 12, color: colors.neutral.textSecondary, lineHeight: 18 }}>
+                      {isRTL
+                        ? 'سيؤدي حذف هذه المنشأة إلى إزالة جميع بيانات الرخصة التجارية، وسجلات الفواتير، والمصروفات، وملف ضريبة الشركات المرتبط بها نهائياً.'
+                        : 'Permanently deletes this UAE business entity, including its trade license record, associated invoices, expense bills, and EmaraTax assessments.'}
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.deleteBizBtn}
+                      onPress={handleDeleteActiveBusiness}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="trash-outline" size={16} color="#FFFFFF" />
+                      <Text style={styles.deleteBizBtnText}>
+                        {isRTL
+                          ? `حذف ${activeBusiness?.tradeName || 'المنشأة'}`
+                          : `Delete ${activeBusiness?.tradeName || 'Business Entity'}`}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
               </>
             )}
 
@@ -1144,879 +1283,1048 @@ export default function ProfileScreen() {
       {/* ==================================================================== */}
       {/* MODAL 1: ACCOUNT SETTINGS                                             */}
       {/* ==================================================================== */}
-      <Modal visible={activeModal === 'account'} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalTitle}>Account Profile</Text>
-              <TouchableOpacity onPress={() => setActiveModal(null)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.modalInfoRow}>
-              <Text style={styles.modalInfoLabel}>Full Name</Text>
-              <Text style={styles.modalInfoValue}>{currentUser?.fullName || 'Not Signed In'}</Text>
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.modalInfoRow}>
-              <Text style={styles.modalInfoLabel}>Email Address</Text>
-              <Text style={styles.modalInfoValue}>{currentUser?.email || 'N/A'}</Text>
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.modalInfoRow}>
-              <Text style={styles.modalInfoLabel}>Phone Number</Text>
-              <Text style={styles.modalInfoValue}>{currentUser?.phone || '+971 UAE'}</Text>
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.modalInfoRow}>
-              <Text style={styles.modalInfoLabel}>Organisation</Text>
-              <Text style={styles.modalInfoValue}>
-                {currentUser?.organisationName || activeBusiness?.legalName || 'Primary Tenant'}
-              </Text>
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.modalInfoRow}>
-              <Text style={styles.modalInfoLabel}>Role</Text>
-              <Text style={styles.modalInfoValue}>{currentUser?.role || 'ADMIN'}</Text>
-            </View>
-
-            <TouchableOpacity
-              style={[styles.actionFullBtn, { marginTop: 18 }]}
-              onPress={async () => {
-                setIsSaving(true);
-                await loadUserProfile();
-                setIsSaving(false);
-                setActiveModal(null);
-              }}
-            >
-              {isSaving ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <Text style={styles.actionFullBtnText}>Sync Profile with Cloud Server</Text>
-              )}
+      <SmoothModal
+        visible={activeModal === 'account'}
+        onClose={() => setActiveModal(null)}
+        maxWidth={440}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle}>Account Profile</Text>
+            <TouchableOpacity onPress={() => setActiveModal(null)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
             </TouchableOpacity>
           </View>
+
+          <View style={styles.modalInfoRow}>
+            <Text style={styles.modalInfoLabel}>Full Name</Text>
+            <Text style={styles.modalInfoValue}>{currentUser?.fullName || 'Not Signed In'}</Text>
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.modalInfoRow}>
+            <Text style={styles.modalInfoLabel}>Email Address</Text>
+            <Text style={styles.modalInfoValue}>{currentUser?.email || 'N/A'}</Text>
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.modalInfoRow}>
+            <Text style={styles.modalInfoLabel}>Phone Number</Text>
+            <Text style={styles.modalInfoValue}>{currentUser?.phone || '+971 UAE'}</Text>
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.modalInfoRow}>
+            <Text style={styles.modalInfoLabel}>Organisation</Text>
+            <Text style={styles.modalInfoValue}>
+              {currentUser?.organisationName || activeBusiness?.legalName || 'Primary Tenant'}
+            </Text>
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.modalInfoRow}>
+            <Text style={styles.modalInfoLabel}>Role</Text>
+            <Text style={styles.modalInfoValue}>{currentUser?.role || 'ADMIN'}</Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.actionFullBtn, { marginTop: 18 }]}
+            onPress={async () => {
+              setIsSaving(true);
+              await loadUserProfile();
+              setIsSaving(false);
+              setActiveModal(null);
+            }}
+          >
+            {isSaving ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.actionFullBtnText}>Sync Profile with Cloud Server</Text>
+            )}
+          </TouchableOpacity>
         </View>
-      </Modal>
+      </SmoothModal>
 
       {/* ==================================================================== */}
       {/* MODAL 2: NOTIFICATIONS SETTINGS                                       */}
       {/* ==================================================================== */}
-      <Modal visible={activeModal === 'notifications'} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalTitle}>Notification Preferences</Text>
-              <TouchableOpacity onPress={() => setActiveModal(null)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextCol}>
-                <Text style={styles.toggleTitle}>VAT Form 201 Filing Deadlines</Text>
-                <Text style={styles.toggleDesc}>Remind 14 and 3 days before FTA return due date</Text>
-              </View>
-              <AnimatedSwitch
-                value={vatDeadlineAlerts}
-                onValueChange={(v) => updateNotifPref('vatDeadlineAlerts', v)}
-                accessibilityLabel="VAT Deadlines"
-              />
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextCol}>
-                <Text style={styles.toggleTitle}>Corporate Tax Registration & Return</Text>
-                <Text style={styles.toggleDesc}>Alerts for Article 21 SBR & 9-month filing window</Text>
-              </View>
-              <AnimatedSwitch
-                value={ctFilingReminders}
-                onValueChange={(v) => updateNotifPref('ctFilingReminders', v)}
-                accessibilityLabel="Corporate Tax Reminders"
-              />
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextCol}>
-                <Text style={styles.toggleTitle}>Unverified OCR Receipt Queue</Text>
-                <Text style={styles.toggleDesc}>Notify when scanned bills require tax review</Text>
-              </View>
-              <AnimatedSwitch
-                value={ocrReviewAlerts}
-                onValueChange={(v) => updateNotifPref('ocrReviewAlerts', v)}
-                accessibilityLabel="OCR Review Alerts"
-              />
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextCol}>
-                <Text style={styles.toggleTitle}>FTA Penalty Risk Warnings</Text>
-                <Text style={styles.toggleDesc}>Immediate alert for compliance blockers</Text>
-              </View>
-              <AnimatedSwitch
-                value={ftaPenaltyWarnings}
-                onValueChange={(v) => updateNotifPref('ftaPenaltyWarnings', v)}
-                accessibilityLabel="FTA Penalty Warnings"
-              />
-            </View>
-
-            <TouchableOpacity
-              style={[styles.actionFullBtn, { marginTop: 16 }]}
-              onPress={() => setActiveModal(null)}
-            >
-              <Text style={styles.actionFullBtnText}>Done</Text>
+      <SmoothModal
+        visible={activeModal === 'notifications'}
+        onClose={() => setActiveModal(null)}
+        maxWidth={440}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle}>Notification Preferences</Text>
+            <TouchableOpacity onPress={() => setActiveModal(null)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
             </TouchableOpacity>
           </View>
+
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleTextCol}>
+              <Text style={styles.toggleTitle}>VAT Form 201 Filing Deadlines</Text>
+              <Text style={styles.toggleDesc}>Remind 14 and 3 days before FTA return due date</Text>
+            </View>
+            <AnimatedSwitch
+              value={vatDeadlineAlerts}
+              onValueChange={(v) => updateNotifPref('vatDeadlineAlerts', v)}
+              accessibilityLabel="VAT Deadlines"
+            />
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleTextCol}>
+              <Text style={styles.toggleTitle}>Corporate Tax Registration & Return</Text>
+              <Text style={styles.toggleDesc}>Alerts for Article 21 SBR & 9-month filing window</Text>
+            </View>
+            <AnimatedSwitch
+              value={ctFilingReminders}
+              onValueChange={(v) => updateNotifPref('ctFilingReminders', v)}
+              accessibilityLabel="Corporate Tax Reminders"
+            />
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleTextCol}>
+              <Text style={styles.toggleTitle}>Unverified OCR Receipt Queue</Text>
+              <Text style={styles.toggleDesc}>Notify when scanned bills require tax review</Text>
+            </View>
+            <AnimatedSwitch
+              value={ocrReviewAlerts}
+              onValueChange={(v) => updateNotifPref('ocrReviewAlerts', v)}
+              accessibilityLabel="OCR Review Alerts"
+            />
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleTextCol}>
+              <Text style={styles.toggleTitle}>FTA Penalty Risk Warnings</Text>
+              <Text style={styles.toggleDesc}>Immediate alert for compliance blockers</Text>
+            </View>
+            <AnimatedSwitch
+              value={ftaPenaltyWarnings}
+              onValueChange={(v) => updateNotifPref('ftaPenaltyWarnings', v)}
+              accessibilityLabel="FTA Penalty Warnings"
+            />
+          </View>
+
+          <TouchableOpacity
+            style={[styles.actionFullBtn, { marginTop: 16 }]}
+            onPress={() => setActiveModal(null)}
+          >
+            <Text style={styles.actionFullBtnText}>Done</Text>
+          </TouchableOpacity>
         </View>
-      </Modal>
+      </SmoothModal>
 
       {/* ==================================================================== */}
       {/* MODAL 3: SECURITY & PRIVACY                                           */}
       {/* ==================================================================== */}
-      <Modal visible={activeModal === 'security'} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalTitle}>Security & Data Privacy</Text>
-              <TouchableOpacity onPress={() => setActiveModal(null)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextCol}>
-                <Text style={styles.toggleTitle}>Biometric App Lock</Text>
-                <Text style={styles.toggleDesc}>Require FaceID / Fingerprint when opening Mizan</Text>
-              </View>
-              <AnimatedSwitch
-                value={biometricLock}
-                onValueChange={(v) => updateSecurityPref('biometricLock', v)}
-                accessibilityLabel="Biometric App Lock"
-              />
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextCol}>
-                <Text style={styles.toggleTitle}>Enhanced Session Verification</Text>
-                <Text style={styles.toggleDesc}>Strict JWT signature & tenant boundary enforcement</Text>
-              </View>
-              <AnimatedSwitch
-                value={twoFactorEnabled}
-                onValueChange={(v) => updateSecurityPref('twoFactorEnabled', v)}
-                accessibilityLabel="Enhanced Session Verification"
-              />
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.modalInfoRow}>
-              <Text style={styles.modalInfoLabel}>Password Encryption</Text>
-              <Text style={styles.modalInfoValue}>Salted scrypt + TimingSafeEqual</Text>
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.modalInfoRow}>
-              <Text style={styles.modalInfoLabel}>FTA Record Retention</Text>
-              <Text style={styles.modalInfoValue}>7-Year Statutory Archive (Art. 78)</Text>
-            </View>
-
-            <TouchableOpacity
-              style={[styles.actionFullBtn, { marginTop: 16 }]}
-              onPress={() => setActiveModal(null)}
-            >
-              <Text style={styles.actionFullBtnText}>Close</Text>
+      <SmoothModal
+        visible={activeModal === 'security'}
+        onClose={() => setActiveModal(null)}
+        maxWidth={440}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle}>Security & Data Privacy</Text>
+            <TouchableOpacity onPress={() => setActiveModal(null)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
             </TouchableOpacity>
           </View>
+
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleTextCol}>
+              <Text style={styles.toggleTitle}>Biometric App Lock</Text>
+              <Text style={styles.toggleDesc}>Require FaceID / Fingerprint when opening Mizan</Text>
+            </View>
+            <AnimatedSwitch
+              value={biometricLock}
+              onValueChange={(v) => updateSecurityPref('biometricLock', v)}
+              accessibilityLabel="Biometric App Lock"
+            />
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleTextCol}>
+              <Text style={styles.toggleTitle}>Enhanced Session Verification</Text>
+              <Text style={styles.toggleDesc}>Strict JWT signature & tenant boundary enforcement</Text>
+            </View>
+            <AnimatedSwitch
+              value={twoFactorEnabled}
+              onValueChange={(v) => updateSecurityPref('twoFactorEnabled', v)}
+              accessibilityLabel="Enhanced Session Verification"
+            />
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.modalInfoRow}>
+            <Text style={styles.modalInfoLabel}>Password Encryption</Text>
+            <Text style={styles.modalInfoValue}>Salted scrypt + TimingSafeEqual</Text>
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.modalInfoRow}>
+            <Text style={styles.modalInfoLabel}>FTA Record Retention</Text>
+            <Text style={styles.modalInfoValue}>7-Year Statutory Archive (Art. 78)</Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.actionFullBtn, { marginTop: 16 }]}
+            onPress={() => setActiveModal(null)}
+          >
+            <Text style={styles.actionFullBtnText}>Close</Text>
+          </TouchableOpacity>
         </View>
-      </Modal>
+      </SmoothModal>
 
       {/* ==================================================================== */}
       {/* MODAL: APP & DEVICE PREFERENCES (HAPTICS & SHUTTER SOUND)            */}
       {/* ==================================================================== */}
-      <Modal visible={activeModal === 'app-preferences'} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalTitle}>
-                {isRTL ? 'إعدادات الصوت والاهتزاز' : 'Device & Feedback Preferences'}
-              </Text>
-              <TouchableOpacity onPress={() => setActiveModal(null)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextCol}>
-                <Text style={styles.toggleTitle}>
-                  {isRTL ? 'الاهتزاز التفاعلي (Haptics)' : 'Haptic Vibration Feedback'}
-                </Text>
-                <Text style={styles.toggleDesc}>
-                  {isRTL ? 'الاهتزاز عند النقر على الأزرار والتنبيهات (مغلق افتراضياً)' : 'Vibrate on buttons, tabs, and system alerts (Default: OFF)'}
-                </Text>
-              </View>
-              <AnimatedSwitch
-                value={hapticsEnabled}
-                onValueChange={(v) => updateAppPref('hapticsEnabled', v)}
-                accessibilityLabel="Haptic Vibration Feedback"
-              />
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextCol}>
-                <Text style={styles.toggleTitle}>
-                  {isRTL ? 'صوت التقاط الكاميرا (Shutter Sound)' : 'Camera Shutter Sound'}
-                </Text>
-                <Text style={styles.toggleDesc}>
-                  {isRTL ? 'إصدار صوت عند التقاط صورة الفواتير أو الرخص (مغلق افتراضياً)' : 'Play sound when capturing receipts & trade licenses (Default: OFF)'}
-                </Text>
-              </View>
-              <AnimatedSwitch
-                value={shutterSoundEnabled}
-                onValueChange={(v) => updateAppPref('shutterSoundEnabled', v)}
-                accessibilityLabel="Camera Shutter Sound"
-              />
-            </View>
-            <View style={styles.itemDivider} />
-
-            <View style={styles.modalInfoRow}>
-              <Text style={styles.modalInfoLabel}>Default Policy</Text>
-              <Text style={styles.modalInfoValue}>Silent Operation (Both OFF by default)</Text>
-            </View>
-
-            <TouchableOpacity
-              style={[styles.actionFullBtn, { marginTop: 16 }]}
-              onPress={() => setActiveModal(null)}
-            >
-              <Text style={styles.actionFullBtnText}>Done</Text>
+      <SmoothModal
+        visible={activeModal === 'app-preferences'}
+        onClose={() => setActiveModal(null)}
+        maxWidth={440}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle}>
+              {isRTL ? 'إعدادات الصوت والاهتزاز' : 'Device & Feedback Preferences'}
+            </Text>
+            <TouchableOpacity onPress={() => setActiveModal(null)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
             </TouchableOpacity>
           </View>
+
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleTextCol}>
+              <Text style={styles.toggleTitle}>
+                {isRTL ? 'الاهتزاز التفاعلي (Haptics)' : 'Haptic Vibration Feedback'}
+              </Text>
+              <Text style={styles.toggleDesc}>
+                {isRTL ? 'الاهتزاز عند النقر على الأزرار والتنبيهات (مغلق افتراضياً)' : 'Vibrate on buttons, tabs, and system alerts (Default: OFF)'}
+              </Text>
+            </View>
+            <AnimatedSwitch
+              value={hapticsEnabled}
+              onValueChange={(v) => updateAppPref('hapticsEnabled', v)}
+              accessibilityLabel="Haptic Vibration Feedback"
+            />
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleTextCol}>
+              <Text style={styles.toggleTitle}>
+                {isRTL ? 'صوت التقاط الكاميرا (Shutter Sound)' : 'Camera Shutter Sound'}
+              </Text>
+              <Text style={styles.toggleDesc}>
+                {isRTL ? 'إصدار صوت عند التقاط صورة الفواتير أو الرخص (مغلق افتراضياً)' : 'Play sound when capturing receipts & trade licenses (Default: OFF)'}
+              </Text>
+            </View>
+            <AnimatedSwitch
+              value={shutterSoundEnabled}
+              onValueChange={(v) => updateAppPref('shutterSoundEnabled', v)}
+              accessibilityLabel="Camera Shutter Sound"
+            />
+          </View>
+          <View style={styles.itemDivider} />
+
+          <View style={styles.modalInfoRow}>
+            <Text style={styles.modalInfoLabel}>Default Policy</Text>
+            <Text style={styles.modalInfoValue}>Silent Operation (Both OFF by default)</Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.actionFullBtn, { marginTop: 16 }]}
+            onPress={() => setActiveModal(null)}
+          >
+            <Text style={styles.actionFullBtnText}>Done</Text>
+          </TouchableOpacity>
         </View>
-      </Modal>
+      </SmoothModal>
 
       {/* ==================================================================== */}
       {/* MODAL 4: EDIT BUSINESS FIELD                                          */}
       {/* ==================================================================== */}
-      <Modal visible={activeModal === 'edit-biz-field'} animationType="fade" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalTitle}>Update {editFieldLabel}</Text>
-              <TouchableOpacity onPress={() => setActiveModal(null)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
-            </View>
+      <SmoothModal
+        visible={activeModal === 'edit-biz-field'}
+        onClose={() => setActiveModal(null)}
+        maxWidth={440}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle}>Update {editFieldLabel}</Text>
+            <TouchableOpacity onPress={() => setActiveModal(null)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
+          </View>
 
-            {editFieldHint ? <Text style={styles.modalHintText}>{editFieldHint}</Text> : null}
+          {editFieldHint ? <Text style={styles.modalHintText}>{editFieldHint}</Text> : null}
 
-            <TextInput
-              style={styles.modalTextInput}
-              value={editFieldValue}
-              onChangeText={setEditFieldValue}
-              placeholder={`Enter ${editFieldLabel}`}
-              placeholderTextColor={colors.neutral.textTertiary}
-              autoFocus
-            />
+          <TextInput
+            style={styles.modalTextInput}
+            value={editFieldValue}
+            onChangeText={setEditFieldValue}
+            placeholder={`Enter ${editFieldLabel}`}
+            placeholderTextColor={colors.neutral.textTertiary}
+            keyboardAppearance={isDark ? 'dark' : 'light'}
+            autoFocus
+          />
 
-            <View style={styles.modalActionBtnsRow}>
-              <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => setActiveModal(null)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.modalSaveBtn}
-                onPress={handleSaveBizField}
-                disabled={isSaving}
-              >
-                {isSaving ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.modalSaveText}>Save to Cloud</Text>
-                )}
-              </TouchableOpacity>
-            </View>
+          <View style={styles.modalActionBtnsRow}>
+            <TouchableOpacity
+              style={styles.modalCancelBtn}
+              onPress={() => setActiveModal(null)}
+            >
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.modalSaveBtn}
+              onPress={handleSaveBizField}
+              disabled={isSaving}
+            >
+              {isSaving ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.modalSaveText}>Save to Cloud</Text>
+              )}
+            </TouchableOpacity>
           </View>
         </View>
-      </Modal>
+      </SmoothModal>
 
       {/* ==================================================================== */}
       {/* MODAL 5: INVITE TEAM MEMBER                                           */}
       {/* ==================================================================== */}
-      <Modal visible={activeModal === 'invite-team'} animationType="fade" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalTitle}>Invite Team Member</Text>
-              <TouchableOpacity onPress={() => setActiveModal(null)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
-            </View>
+      <SmoothModal
+        visible={activeModal === 'invite-team'}
+        onClose={() => setActiveModal(null)}
+        maxWidth={440}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle}>Invite Team Member</Text>
+            <TouchableOpacity onPress={() => setActiveModal(null)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
+          </View>
 
-            <Text style={styles.modalHintText}>
-              Grant your accountant or finance manager access to {activeBusiness?.legalName || 'this entity'}.
-            </Text>
+          <Text style={styles.modalHintText}>
+            Grant your accountant or finance manager access to {activeBusiness?.legalName || 'this entity'}.
+          </Text>
 
-            <TextInput
-              style={[styles.modalTextInput, { marginBottom: 10 }]}
-              value={inviteName}
-              onChangeText={setInviteName}
-              placeholder="Full Name (e.g., Sara Al Mansoori)"
-              placeholderTextColor={colors.neutral.textTertiary}
-            />
+          <TextInput
+            style={[styles.modalTextInput, { marginBottom: 10 }]}
+            value={inviteName}
+            onChangeText={setInviteName}
+            placeholder="Full Name (e.g., Sara Al Mansoori)"
+            placeholderTextColor={colors.neutral.textTertiary}
+            keyboardAppearance={isDark ? 'dark' : 'light'}
+          />
 
-            <TextInput
-              style={[styles.modalTextInput, { marginBottom: 12 }]}
-              value={inviteEmail}
-              onChangeText={setInviteEmail}
-              placeholder="Email Address (e.g., sara@firm.ae)"
-              placeholderTextColor={colors.neutral.textTertiary}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
+          <TextInput
+            style={[styles.modalTextInput, { marginBottom: 12 }]}
+            value={inviteEmail}
+            onChangeText={setInviteEmail}
+            placeholder="Email Address (e.g., sara@firm.ae)"
+            placeholderTextColor={colors.neutral.textTertiary}
+            keyboardAppearance={isDark ? 'dark' : 'light'}
+            keyboardType="email-address"
+            autoCapitalize="none"
+          />
 
-            <View style={{ flexDirection: 'row', gap: 6, marginBottom: 16 }}>
-              {(['Tax Accountant', 'Finance Manager', 'Auditor'] as const).map((r) => (
-                <TouchableOpacity
-                  key={r}
-                  style={[styles.bizPill, inviteRole === r && styles.bizPillActive]}
-                  onPress={() => setInviteRole(r)}
-                >
-                  <Text style={[styles.bizPillText, inviteRole === r && styles.bizPillTextActive]}>
-                    {r}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <View style={styles.modalActionBtnsRow}>
+          <View style={{ flexDirection: 'row', gap: 6, marginBottom: 16 }}>
+            {(['Tax Accountant', 'Finance Manager', 'Auditor'] as const).map((r) => (
               <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => setActiveModal(null)}
+                key={r}
+                style={[styles.bizPill, inviteRole === r && styles.bizPillActive]}
+                onPress={() => setInviteRole(r)}
               >
-                <Text style={styles.modalCancelText}>Cancel</Text>
+                <Text style={[styles.bizPillText, inviteRole === r && styles.bizPillTextActive]}>
+                  {r}
+                </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.modalSaveBtn} onPress={handleInviteTeamMember}>
-                <Text style={styles.modalSaveText}>Send Invite</Text>
-              </TouchableOpacity>
-            </View>
+            ))}
+          </View>
+
+          <View style={styles.modalActionBtnsRow}>
+            <TouchableOpacity
+              style={styles.modalCancelBtn}
+              onPress={() => setActiveModal(null)}
+            >
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.modalSaveBtn} onPress={handleInviteTeamMember}>
+              <Text style={styles.modalSaveText}>Send Invite</Text>
+            </TouchableOpacity>
           </View>
         </View>
-      </Modal>
+      </SmoothModal>
+
+      {/* ==================================================================== */}
+      {/* MODAL 6: APPEARANCE & THEME SELECTOR (SYSTEM / LIGHT / DARK)         */}
+      {/* ==================================================================== */}
+      <SmoothModal
+        visible={activeModal === 'appearance'}
+        onClose={() => setActiveModal(null)}
+        maxWidth={440}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle}>{t.profile.appearance}</Text>
+            <TouchableOpacity onPress={() => setActiveModal(null)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.modalHintText}>{t.profile.appearanceDesc}</Text>
+
+          {(
+            [
+              {
+                mode: 'system' as ThemeMode,
+                title: t.profile.themeSystem,
+                desc: isRTL ? 'يتبع إعدادات النظام تلقائياً' : 'Matches your device light/dark setting',
+                icon: 'phone-portrait-outline' as const,
+              },
+              {
+                mode: 'light' as ThemeMode,
+                title: t.profile.themeLight,
+                desc: isRTL ? 'خلفية فاتحة دافئة وبطاقات ناصعة' : 'Warm Pearl canvas with crisp white cards',
+                icon: 'sunny-outline' as const,
+              },
+              {
+                mode: 'dark' as ThemeMode,
+                title: t.profile.themeDark,
+                desc: isRTL ? 'خلفية داكنة مريحة للعين ليلاً' : 'Obsidian dark canvas for low-light clarity',
+                icon: 'moon-outline' as const,
+              },
+            ]
+          ).map((option) => {
+            const selected = themeMode === option.mode;
+            return (
+              <TouchableOpacity
+                key={option.mode}
+                style={[
+                  styles.themeOptionRow,
+                  selected && styles.themeOptionRowSelected,
+                ]}
+                activeOpacity={0.8}
+                onPress={() => setThemeMode(option.mode)}
+              >
+                <View
+                  style={[
+                    styles.themeOptionIconBox,
+                    selected && { backgroundColor: colors.brand.primary },
+                  ]}
+                >
+                  <Ionicons
+                    name={option.icon}
+                    size={18}
+                    color={selected ? colors.neutral.onPrimary : colors.neutral.textPrimary}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingTitle}>{option.title}</Text>
+                  <Text style={styles.settingDesc}>{option.desc}</Text>
+                </View>
+                <Ionicons
+                  name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                  size={20}
+                  color={selected ? colors.brand.primary : colors.neutral.textTertiary}
+                />
+              </TouchableOpacity>
+            );
+          })}
+
+          <TouchableOpacity
+            style={[styles.actionFullBtn, { marginTop: 16 }]}
+            onPress={() => setActiveModal(null)}
+          >
+            <Text style={styles.actionFullBtnText}>{isRTL ? 'تم' : 'Done'}</Text>
+          </TouchableOpacity>
+        </View>
+      </SmoothModal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.neutral.canvas,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    backgroundColor: colors.neutral.canvas,
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.neutral.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  brandLogoBox: {
-    width: 28,
-    height: 28,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 3,
-  },
-  logoSlantBar1: {
-    width: 8,
-    height: 22,
-    backgroundColor: colors.brand.primary,
-    borderRadius: 4,
-    transform: [{ skewX: '-18deg' }],
-  },
-  logoSlantBar2: {
-    width: 8,
-    height: 22,
-    backgroundColor: colors.brand.primary,
-    borderRadius: 4,
-    transform: [{ skewX: '-18deg' }],
-  },
-  brandTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.neutral.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-  },
-  container: {
-    flex: 1,
-  },
-  contentContainer: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xs,
-  },
-  profileSection: {
-    gap: 12,
-  },
-  pageTitleBlock: {
-    marginBottom: 6,
-  },
-  pageHeading: {
-    fontSize: 26,
-    fontWeight: '900',
-    color: colors.neutral.textPrimary,
-    marginBottom: 4,
-  },
-  pageSub: {
-    fontSize: 13,
-    color: colors.neutral.textSecondary,
-  },
-  userCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.xl,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    ...shadows.card,
-  },
-  avatarBig: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: '#EAE6E1',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 14,
-    position: 'relative',
-  },
-  avatarBigText: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  avatarEditPencil: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: colors.brand.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  userInfoCol: {
-    flex: 1,
-  },
-  userName: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-    marginBottom: 2,
-  },
-  userEmail: {
-    fontSize: 12,
-    color: colors.neutral.textSecondary,
-    marginBottom: 2,
-  },
-  userPhone: {
-    fontSize: 11,
-    color: colors.neutral.textTertiary,
-  },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 6,
-  },
-  sectionTitleGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  sectionHeading: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  addBizBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: colors.brand.primary,
-  },
-  addBizBtnText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.brand.primary,
-  },
-  businessCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.lg,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    ...shadows.card,
-  },
-  bizIconSquare: {
-    width: 42,
-    height: 42,
-    borderRadius: 10,
-    backgroundColor: colors.brand.primaryMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  bizInfoCol: {
-    flex: 1,
-  },
-  bizNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 3,
-  },
-  bizName: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    flexShrink: 1,
-  },
-  primaryTag: {
-    backgroundColor: colors.semantic.successBg,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  primaryTagText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: colors.semantic.successDark,
-  },
-  bizTradeLicense: {
-    fontSize: 11,
-    color: colors.neutral.textSecondary,
-  },
-  manageBizPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.brand.primaryMuted,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: radii.pill,
-  },
-  manageBizPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.brand.primary,
-  },
-  settingsGroupCard: {
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.xl,
-    paddingVertical: 6,
-    paddingHorizontal: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    ...shadows.card,
-  },
-  settingsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-  },
-  settingIconSquare: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    backgroundColor: colors.neutral.surfaceSubdued,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  settingTextCol: {
-    flex: 1,
-  },
-  settingTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    marginBottom: 2,
-  },
-  settingDesc: {
-    fontSize: 11,
-    color: colors.neutral.textTertiary,
-  },
-  itemDivider: {
-    height: 1,
-    backgroundColor: colors.neutral.border,
-  },
-  businessSettingsSection: {
-    gap: 12,
-  },
-  bizHeroDarkCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.brand.darkHero,
-    borderRadius: radii.xl,
-    padding: spacing.lg,
-    ...shadows.cardHover,
-  },
-  bizHeroIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: 'rgba(249, 87, 0, 0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  bizHeroInfoCol: {
-    flex: 1,
-  },
-  bizHeroNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  bizHeroTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    flexShrink: 1,
-  },
-  bizHeroSubtitle: {
-    fontSize: 12,
-    color: '#9CA3AF',
-  },
-  bizPillRow: {
-    flexDirection: 'row',
-    gap: 6,
-    paddingVertical: 2,
-  },
-  bizPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: radii.pill,
-    backgroundColor: colors.neutral.surface,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-  },
-  bizPillActive: {
-    backgroundColor: colors.brand.primary,
-    borderColor: colors.brand.primary,
-  },
-  bizPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.neutral.textSecondary,
-  },
-  bizPillTextActive: {
-    color: '#FFFFFF',
-  },
-  detailsGroupHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 6,
-  },
-  detailsGroupTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  settingItemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-  },
-  itemKeyLabel: {
-    fontSize: 11,
-    color: colors.neutral.textTertiary,
-    marginBottom: 2,
-  },
-  itemValText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-  },
-  toggleTextCol: {
-    flex: 1,
-    marginRight: 12,
-  },
-  toggleTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    marginBottom: 2,
-  },
-  toggleDesc: {
-    fontSize: 11,
-    color: colors.neutral.textTertiary,
-    lineHeight: 15,
-  },
-  actionFullBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: colors.brand.primary,
-    paddingVertical: 14,
-    borderRadius: radii.lg,
-    marginTop: 8,
-  },
-  actionFullBtnText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.lg,
-  },
-  modalCard: {
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.xl,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    ...shadows.cardHover,
-  },
-  modalHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-  },
-  modalTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  modalHintText: {
-    fontSize: 12,
-    color: colors.neutral.textSecondary,
-    marginBottom: 12,
-    lineHeight: 18,
-  },
-  modalInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-  },
-  modalInfoLabel: {
-    fontSize: 12,
-    color: colors.neutral.textSecondary,
-    fontWeight: '600',
-  },
-  modalInfoValue: {
-    fontSize: 13,
-    color: colors.neutral.textPrimary,
-    fontWeight: '700',
-  },
-  modalTextInput: {
-    backgroundColor: colors.neutral.canvas,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    borderRadius: radii.md,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: colors.neutral.textPrimary,
-    marginBottom: 16,
-  },
-  modalActionBtnsRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  modalCancelBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    alignItems: 'center',
-  },
-  modalCancelText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.neutral.textSecondary,
-  },
-  modalSaveBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: radii.md,
-    backgroundColor: colors.brand.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalSaveText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-});
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) =>
+  StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      backgroundColor: colors.neutral.canvas,
+    },
+    headerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
+      backgroundColor: colors.neutral.canvas,
+    },
+    headerLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+    },
+    backButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.neutral.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+    },
+    headerTitle: {
+      fontSize: 18,
+      fontWeight: '800',
+      color: colors.neutral.textPrimary,
+    },
+    brandRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    brandLogoBox: {
+      width: 28,
+      height: 28,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 3,
+    },
+    logoSlantBar1: {
+      width: 8,
+      height: 22,
+      backgroundColor: colors.brand.primary,
+      borderRadius: 4,
+      transform: [{ skewX: '-18deg' }],
+    },
+    logoSlantBar2: {
+      width: 8,
+      height: 22,
+      backgroundColor: colors.brand.primary,
+      borderRadius: 4,
+      transform: [{ skewX: '-18deg' }],
+    },
+    brandTitle: {
+      ...fontStyles.displayBold,
+      fontSize: 20,
+      color: colors.neutral.textPrimary,
+    },
+    headerActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    headerIconBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.neutral.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+    },
+    container: {
+      flex: 1,
+    },
+    contentContainer: {
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.xs,
+    },
+    profileSection: {
+      gap: 12,
+    },
+    pageTitleBlock: {
+      marginBottom: 6,
+    },
+    pageHeading: {
+      fontSize: 26,
+      fontWeight: '900',
+      color: colors.neutral.textPrimary,
+      marginBottom: 4,
+    },
+    pageSub: {
+      fontSize: 13,
+      color: colors.neutral.textSecondary,
+    },
+    userCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.neutral.surface,
+      borderRadius: radii.xl,
+      padding: spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+      ...shadows.card,
+    },
+    avatarBig: {
+      width: 54,
+      height: 54,
+      borderRadius: 27,
+      backgroundColor: colors.neutral.skeletonBase,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 14,
+      position: 'relative',
+      overflow: 'hidden',
+    },
+    avatarBigImage: {
+      width: 54,
+      height: 54,
+      borderRadius: 27,
+    },
+    avatarBigText: {
+      fontSize: 18,
+      fontWeight: '800',
+      color: colors.neutral.textPrimary,
+    },
+    avatarEditPencil: {
+      position: 'absolute',
+      bottom: 0,
+      right: 0,
+      width: 18,
+      height: 18,
+      borderRadius: 9,
+      backgroundColor: colors.brand.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    userHandleBadge: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: colors.brand.primary,
+      backgroundColor: colors.brand.primaryMuted,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: radii.pill,
+    },
+    userInfoCol: {
+      flex: 1,
+    },
+    userName: {
+      ...fontStyles.displayBold,
+      fontSize: 16,
+      color: colors.neutral.textPrimary,
+      marginBottom: 2,
+    },
+    userEmail: {
+      ...fontStyles.bodyRegular,
+      fontSize: 12,
+      color: colors.neutral.textSecondary,
+      marginBottom: 2,
+    },
+    userPhone: {
+      fontSize: 11,
+      color: colors.neutral.textTertiary,
+    },
+    sectionHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: 6,
+    },
+    sectionTitleGroup: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    sectionHeading: {
+      fontSize: 15,
+      fontWeight: '800',
+      color: colors.neutral.textPrimary,
+    },
+    addBizBtn: {
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      borderRadius: radii.pill,
+      borderWidth: 1,
+      borderColor: colors.brand.primary,
+    },
+    addBizBtnText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: colors.brand.primary,
+    },
+    businessCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.neutral.surface,
+      borderRadius: radii.lg,
+      padding: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+      ...shadows.card,
+    },
+    bizIconSquare: {
+      width: 42,
+      height: 42,
+      borderRadius: 10,
+      backgroundColor: colors.brand.primaryMuted,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+    },
+    bizInfoCol: {
+      flex: 1,
+    },
+    bizNameRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 3,
+    },
+    bizName: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: colors.neutral.textPrimary,
+      flexShrink: 1,
+    },
+    primaryTag: {
+      backgroundColor: colors.semantic.successBg,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 4,
+    },
+    primaryTagText: {
+      fontSize: 9,
+      fontWeight: '700',
+      color: colors.semantic.successText,
+    },
+    bizTradeLicense: {
+      fontSize: 11,
+      color: colors.neutral.textSecondary,
+    },
+    manageBizPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: colors.brand.primaryMuted,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: radii.pill,
+    },
+    manageBizPillText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: colors.brand.primary,
+    },
+    deleteBizSmallBtn: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: colors.semantic.riskBg,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: colors.semantic.riskBorder,
+    },
+    deleteBizBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      backgroundColor: colors.semantic.risk,
+      paddingVertical: 12,
+      borderRadius: radii.md,
+      marginTop: 4,
+    },
+    deleteBizBtnText: {
+      color: colors.neutral.onPrimary,
+      fontSize: 13,
+      fontWeight: '700',
+    },
+    settingsGroupCard: {
+      backgroundColor: colors.neutral.surface,
+      borderRadius: radii.xl,
+      paddingVertical: 6,
+      paddingHorizontal: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+      ...shadows.card,
+    },
+    settingsRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 12,
+    },
+    settingIconSquare: {
+      width: 34,
+      height: 34,
+      borderRadius: 8,
+      backgroundColor: colors.neutral.surfaceSubdued,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+    },
+    settingTextCol: {
+      flex: 1,
+    },
+    settingTitle: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: colors.neutral.textPrimary,
+      marginBottom: 2,
+    },
+    settingDesc: {
+      fontSize: 11,
+      color: colors.neutral.textTertiary,
+    },
+    itemDivider: {
+      height: 1,
+      backgroundColor: colors.neutral.border,
+    },
+    businessSettingsSection: {
+      gap: 12,
+    },
+    bizHeroDarkCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.brand.darkHero,
+      borderRadius: radii.xl,
+      borderWidth: 1,
+      borderColor: colors.brand.darkHeroBorder,
+      padding: spacing.lg,
+      ...shadows.cardHover,
+    },
+    bizHeroIconBox: {
+      width: 44,
+      height: 44,
+      borderRadius: 12,
+      backgroundColor: colors.brand.primaryMuted,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+    },
+    bizHeroInfoCol: {
+      flex: 1,
+    },
+    bizHeroNameRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 4,
+    },
+    bizHeroTitle: {
+      fontSize: 15,
+      fontWeight: '800',
+      color: colors.neutral.white,
+      flexShrink: 1,
+    },
+    bizHeroSubtitle: {
+      fontSize: 12,
+      color: '#9CA3AF',
+    },
+    bizPillRow: {
+      flexDirection: 'row',
+      gap: 6,
+      paddingVertical: 2,
+    },
+    bizPill: {
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: radii.pill,
+      backgroundColor: colors.neutral.surface,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+    },
+    bizPillActive: {
+      backgroundColor: colors.brand.primary,
+      borderColor: colors.brand.primary,
+    },
+    bizPillText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: colors.neutral.textSecondary,
+    },
+    bizPillTextActive: {
+      color: colors.neutral.onPrimary,
+    },
+    detailsGroupHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginTop: 6,
+    },
+    detailsGroupTitle: {
+      fontSize: 14,
+      fontWeight: '800',
+      color: colors.neutral.textPrimary,
+    },
+    settingItemRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 12,
+    },
+    itemKeyLabel: {
+      fontSize: 11,
+      color: colors.neutral.textTertiary,
+      marginBottom: 2,
+    },
+    itemValText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.neutral.textPrimary,
+    },
+    toggleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 12,
+    },
+    toggleTextCol: {
+      flex: 1,
+      marginRight: 12,
+    },
+    toggleTitle: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.neutral.textPrimary,
+      marginBottom: 2,
+    },
+    toggleDesc: {
+      fontSize: 11,
+      color: colors.neutral.textTertiary,
+      lineHeight: 15,
+    },
+    actionFullBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      backgroundColor: colors.brand.primary,
+      paddingVertical: 14,
+      borderRadius: radii.lg,
+      marginTop: 8,
+    },
+    actionFullBtnText: {
+      fontSize: 14,
+      fontWeight: '800',
+      color: colors.neutral.onPrimary,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: colors.neutral.scrim,
+      justifyContent: 'center',
+      paddingHorizontal: spacing.lg,
+    },
+    modalCard: {
+      backgroundColor: colors.neutral.surfaceRaised,
+      borderRadius: radii.xl,
+      padding: spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+      ...shadows.cardHover,
+    },
+    modalHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 14,
+    },
+    modalTitle: {
+      ...fontStyles.displayBold,
+      fontSize: 17,
+      color: colors.neutral.textPrimary,
+    },
+    modalHintText: {
+      fontSize: 12,
+      color: colors.neutral.textSecondary,
+      marginBottom: 12,
+      lineHeight: 18,
+    },
+    modalInfoRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 12,
+    },
+    modalInfoLabel: {
+      fontSize: 12,
+      color: colors.neutral.textSecondary,
+      fontWeight: '600',
+    },
+    modalInfoValue: {
+      fontSize: 13,
+      color: colors.neutral.textPrimary,
+      fontWeight: '700',
+    },
+    modalTextInput: {
+      backgroundColor: colors.neutral.surfaceInset,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+      borderRadius: radii.md,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      fontSize: 14,
+      color: colors.neutral.textPrimary,
+      marginBottom: 16,
+    },
+    modalActionBtnsRow: {
+      flexDirection: 'row',
+      gap: 10,
+    },
+    modalCancelBtn: {
+      flex: 1,
+      paddingVertical: 12,
+      borderRadius: radii.md,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+      alignItems: 'center',
+    },
+    modalCancelText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.neutral.textSecondary,
+    },
+    modalSaveBtn: {
+      flex: 1,
+      paddingVertical: 12,
+      borderRadius: radii.md,
+      backgroundColor: colors.brand.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    modalSaveText: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: colors.neutral.onPrimary,
+    },
+    themeOptionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      padding: 12,
+      borderRadius: radii.lg,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+      backgroundColor: colors.neutral.surfaceSubdued,
+      marginBottom: 10,
+    },
+    themeOptionRowSelected: {
+      borderColor: colors.brand.primary,
+      backgroundColor: colors.brand.primaryMuted,
+    },
+    themeOptionIconBox: {
+      width: 36,
+      height: 36,
+      borderRadius: 10,
+      backgroundColor: colors.neutral.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+    },
+  });

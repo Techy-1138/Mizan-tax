@@ -20,6 +20,7 @@ import * as Haptics from 'expo-haptics';
 import { motionScales } from './motionTokens';
 import { motionSprings } from './easings';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
+import { AppPreferences } from '../utils/preferences';
 
 export interface AnimatedTabButtonProps {
   children: React.ReactNode;
@@ -50,8 +51,8 @@ export const AnimatedTabButton: React.FC<AnimatedTabButtonProps> = ({
   });
 
   const handlePressIn = () => {
-    // Micro-haptic tactile feedback for tab selection
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    // Micro-haptic tactile feedback for tab selection if enabled in preferences
+    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
 
     if (!isReducedMotion) {
       scale.value = withSpring(motionScales.buttonPress, motionSprings.press);

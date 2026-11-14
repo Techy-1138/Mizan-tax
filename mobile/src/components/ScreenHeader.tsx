@@ -6,10 +6,12 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radii, spacing } from '../theme/tokens';
+import { ThemeColors, radii, spacing, getFont } from '../theme/tokens';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { useLocale } from '../context/LocaleContext';
 import { useBusiness } from '../context/BusinessContext';
 import { useRouter } from 'expo-router';
+import { SyncStatusPill } from './SyncStatusPill';
 
 interface ScreenHeaderProps {
   onPressNotifications?: () => void;
@@ -24,7 +26,14 @@ const getBusinessIcon = (iconName?: string): keyof typeof Ionicons.glyphMap => {
 export const ScreenHeader: React.FC<ScreenHeaderProps> = ({ onPressNotifications }) => {
   const router = useRouter();
   const { t, locale, toggleLocale, isRTL } = useLocale();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const { activeBusiness } = useBusiness();
+
+  const fontGreeting = getFont('medium', isRTL);
+  const fontUserName = getFont('bold', isRTL, true); // Outfit Bold in EN / Cairo Bold in AR
+  const fontEntity = getFont('bold', isRTL);
+  const fontLanguage = getFont('bold', isRTL);
 
   return (
     <View style={[styles.container, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
@@ -42,15 +51,15 @@ export const ScreenHeader: React.FC<ScreenHeaderProps> = ({ onPressNotifications
           />
         </TouchableOpacity>
         <View style={[styles.textBlock, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
-          <Text style={styles.greetingText}>
-            {t.home.greeting} <Text style={styles.userName}>{t.home.defaultUser}</Text>
+          <Text style={[styles.greetingText, fontGreeting]}>
+            {t.home.greeting} <Text style={[styles.userName, fontUserName]}>{t.home.defaultUser}</Text>
           </Text>
           <TouchableOpacity
             style={[styles.entityPill, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}
             onPress={() => router.push('/(tabs)/profile')}
             activeOpacity={0.7}
           >
-            <Text style={styles.entityPillText} numberOfLines={1}>
+            <Text style={[styles.entityPillText, fontEntity]} numberOfLines={1}>
               {activeBusiness?.tradeName || activeBusiness?.legalName || 'Register Business'}
             </Text>
             <Ionicons
@@ -62,15 +71,17 @@ export const ScreenHeader: React.FC<ScreenHeaderProps> = ({ onPressNotifications
         </View>
       </View>
 
-      {/* Right: Language Switcher & Flag */}
+      {/* Right: Sync Status & Language Switcher & Flag */}
       <View style={[styles.controlsRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+        <SyncStatusPill />
+
         <TouchableOpacity
           style={[styles.languagePill, { flexDirection: isRTL ? 'row-reverse' : 'row', alignItems: 'center', gap: 4 }]}
           activeOpacity={0.75}
           onPress={toggleLocale}
         >
           <Ionicons name="globe-outline" size={13} color={colors.brand.burgundy} />
-          <Text style={styles.languageText}>{t.common.switchLanguage}</Text>
+          <Text style={[styles.languageText, fontLanguage]}>{t.common.switchLanguage}</Text>
         </TouchableOpacity>
 
         <View style={styles.flagBadge}>
@@ -81,99 +92,96 @@ export const ScreenHeader: React.FC<ScreenHeaderProps> = ({ onPressNotifications
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-  },
-  userBlock: {
-    alignItems: 'center',
-    gap: spacing.sm + 2,
-    flex: 1,
-  },
-  avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.brand.burgundy,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: colors.brand.blushAlt,
-  },
-  avatarText: {
-    color: colors.neutral.white,
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  textBlock: {
-    flex: 1,
-  },
-  greetingText: {
-    fontSize: 16,
-    color: colors.neutral.textPrimary,
-    fontWeight: '500',
-  },
-  userName: {
-    fontWeight: '700',
-    color: colors.brand.burgundy,
-  },
-  subtitleText: {
-    fontSize: 12,
-    color: colors.neutral.textSecondary,
-    marginTop: 1,
-  },
-  entityPill: {
-    backgroundColor: colors.brand.blushSoft,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: radii.pill,
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
-    maxWidth: 180,
-  },
-  entityPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.brand.burgundy,
-    flexShrink: 1,
-  },
-  switchIcon: {
-    fontSize: 8,
-    color: colors.brand.burgundy,
-  },
-  controlsRow: {
-    alignItems: 'center',
-    gap: spacing.xs + 2,
-  },
-  languagePill: {
-    backgroundColor: colors.brand.blush,
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.xs,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: colors.brand.blushAlt,
-  },
-  languageText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.brand.burgundy,
-  },
-  flagBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.neutral.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-  },
-  flagIcon: {
-    fontSize: 18,
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: {
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.sm,
+    },
+    userBlock: {
+      alignItems: 'center',
+      gap: spacing.sm + 2,
+      flex: 1,
+    },
+    avatar: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.brand.burgundy,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1.5,
+      borderColor: colors.brand.blushAlt,
+    },
+    avatarText: {
+      color: colors.neutral.white,
+      fontSize: 17,
+      fontWeight: '700',
+    },
+    textBlock: {
+      flex: 1,
+    },
+    greetingText: {
+      fontSize: 16,
+      color: colors.neutral.textPrimary,
+    },
+    userName: {
+      color: colors.brand.burgundy,
+    },
+    subtitleText: {
+      fontSize: 12,
+      color: colors.neutral.textSecondary,
+      marginTop: 1,
+    },
+    entityPill: {
+      backgroundColor: colors.brand.blushSoft,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 2,
+      borderRadius: radii.pill,
+      alignItems: 'center',
+      gap: 4,
+      marginTop: 2,
+      maxWidth: 180,
+    },
+    entityPillText: {
+      fontSize: 11,
+      color: colors.brand.burgundy,
+      flexShrink: 1,
+    },
+    switchIcon: {
+      fontSize: 8,
+      color: colors.brand.burgundy,
+    },
+    controlsRow: {
+      alignItems: 'center',
+      gap: spacing.xs + 2,
+    },
+    languagePill: {
+      backgroundColor: colors.brand.blush,
+      paddingHorizontal: spacing.sm + 2,
+      paddingVertical: spacing.xs,
+      borderRadius: radii.pill,
+      borderWidth: 1,
+      borderColor: colors.brand.blushAlt,
+    },
+    languageText: {
+      fontSize: 12,
+      color: colors.brand.burgundy,
+    },
+    flagBadge: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: colors.neutral.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+    },
+    flagIcon: {
+      fontSize: 18,
+    },
+  });

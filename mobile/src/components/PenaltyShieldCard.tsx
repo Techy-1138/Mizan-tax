@@ -8,8 +8,10 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../theme/tokens';
+import { ThemeColors, radii, spacing } from '../theme/tokens';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { useLocale } from '../context/LocaleContext';
+import { AppPreferences } from '../utils/preferences';
 
 interface PenaltyShieldCardProps {
   daysRemaining?: number;
@@ -25,6 +27,8 @@ export const PenaltyShieldCard: React.FC<PenaltyShieldCardProps> = ({
   onPressFiling,
 }) => {
   const { t, isRTL } = useLocale();
+  const { colors, shadows } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   return (
     <View style={[styles.card, shadows.card]}>
@@ -54,7 +58,7 @@ export const PenaltyShieldCard: React.FC<PenaltyShieldCardProps> = ({
         style={[styles.actionButton, shadows.pillButton]}
         activeOpacity={0.85}
         onPress={() => {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          AppPreferences.impact(Haptics.ImpactFeedbackStyle.Medium);
           onPressFiling?.();
         }}
       >
@@ -74,72 +78,73 @@ export const PenaltyShieldCard: React.FC<PenaltyShieldCardProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: colors.brand.blushSoft,
-    borderRadius: radii.xl,
-    padding: spacing.lg,
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
-    borderWidth: 1.5,
-    borderColor: colors.brand.blushAlt,
-  },
-  headerRow: {
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.sm + 2,
-  },
-  alertPill: {
-    backgroundColor: colors.semantic.riskBg,
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.xs,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 107, 107, 0.3)',
-  },
-  alertPillText: {
-    color: colors.semantic.risk,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  daysBadge: {
-    backgroundColor: 'rgba(74, 0, 31, 0.08)',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderRadius: radii.pill,
-  },
-  daysBadgeText: {
-    color: colors.brand.burgundy,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  title: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.brand.burgundy,
-    marginBottom: spacing.xs,
-  },
-  description: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: colors.neutral.textSecondary,
-    marginBottom: spacing.md,
-  },
-  actionButton: {
-    backgroundColor: colors.brand.burgundy,
-    borderRadius: radii.pill,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionButtonContent: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionButtonText: {
-    color: colors.neutral.white,
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    card: {
+      backgroundColor: colors.brand.blushSoft,
+      borderRadius: radii.xl,
+      padding: spacing.lg,
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.lg,
+      borderWidth: 1.5,
+      borderColor: colors.brand.blushAlt,
+    },
+    headerRow: {
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: spacing.sm + 2,
+    },
+    alertPill: {
+      backgroundColor: colors.semantic.riskBg,
+      paddingHorizontal: spacing.sm + 2,
+      paddingVertical: spacing.xs,
+      borderRadius: radii.pill,
+      borderWidth: 1,
+      borderColor: colors.semantic.riskBorder,
+    },
+    alertPillText: {
+      color: colors.semantic.riskText,
+      fontSize: 11,
+      fontWeight: '700',
+    },
+    daysBadge: {
+      backgroundColor: colors.brand.primaryMuted,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+      borderRadius: radii.pill,
+    },
+    daysBadgeText: {
+      color: colors.brand.primary,
+      fontSize: 11,
+      fontWeight: '700',
+    },
+    title: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: colors.brand.primary,
+      marginBottom: spacing.xs,
+    },
+    description: {
+      fontSize: 13,
+      lineHeight: 19,
+      color: colors.neutral.textSecondary,
+      marginBottom: spacing.md,
+    },
+    actionButton: {
+      backgroundColor: colors.brand.primary,
+      borderRadius: radii.pill,
+      paddingVertical: spacing.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    actionButtonContent: {
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    actionButtonText: {
+      color: colors.neutral.onPrimary,
+      fontSize: 14,
+      fontWeight: '700',
+      letterSpacing: 0.2,
+    },
+  });

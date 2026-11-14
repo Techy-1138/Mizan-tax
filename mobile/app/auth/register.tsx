@@ -19,21 +19,22 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from '../../src/components/SafeAreaView';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { MizanApi } from '../../src/services/api';
 import {
-  auth,
-  GoogleAuthProvider,
-  signInWithCredential,
-} from '../../src/services/firebase';
-import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
+  configureGoogleSignIn,
+  performGoogleSignIn,
+} from '../../src/services/googleAuth';
 import { AppPreferences } from '../../src/utils/preferences';
 
 export default function RegisterScreen() {
   const router = useRouter();
   const { locale, toggleLocale, isRTL } = useLocale();
+  const { colors, isDark } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const { refreshBusinesses } = useBusiness();
 
   const [fullName, setFullName] = useState('');
@@ -46,16 +47,9 @@ export default function RegisterScreen() {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Initialize Google Sign-in with client credentials on mount
+  // Safely configure native Google Sign-in only when RNGoogleSignin is linked (skips Expo Go cleanly)
   useEffect(() => {
-    try {
-      GoogleSignin.configure({
-        webClientId: '665284372832-ktbs8le1749cpa9edgd7tilbjf76o060.apps.googleusercontent.com',
-        offlineAccess: true,
-      });
-    } catch (e: any) {
-      console.warn('Google Sign-in configuration warning:', e.message);
-    }
+    configureGoogleSignIn();
   }, []);
 
   const getFirebaseAuthErrorMessage = (code: string, isRTL: boolean): string => {
@@ -129,14 +123,17 @@ export default function RegisterScreen() {
     try {
       setIsGoogleLoading(true);
       setErrorMessage(null);
-      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
-      const response = await GoogleSignin.signIn();
-      const idToken = (response as any)?.data?.idToken || (response as any)?.idToken;
-      if (!idToken) {
-        throw new Error('Could not retrieve Google ID token.');
+
+      // Delegate native module guard, Google flow, and Firebase credential swap to shared helper
+      const outcome = await performGoogleSignIn(isRTL);
+      if (outcome.status === 'cancelled') {
+        return;
       }
-      const credential = GoogleAuthProvider.credential(idToken);
-      await signInWithCredential(auth, credential);
+      if (outcome.status === 'unavailable' || outcome.status === 'error') {
+        setErrorMessage(outcome.message);
+        AppPreferences.notification(Haptics.NotificationFeedbackType.Error);
+        return;
+      }
 
       AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
       await refreshBusinesses();
@@ -146,24 +143,6 @@ export default function RegisterScreen() {
       } else {
         router.replace('/onboarding/business');
       }
-    } catch (error: any) {
-      if (error?.code === statusCodes?.SIGN_IN_CANCELLED) {
-        return;
-      } else if (error?.code === statusCodes?.IN_PROGRESS) {
-        return;
-      } else if (error?.code === statusCodes?.PLAY_SERVICES_NOT_AVAILABLE) {
-        setErrorMessage(
-          isRTL
-            ? 'خدمات Google Play غير متوفرة أو قديمة على هذا الجهاز.'
-            : 'Google Play Services not available or outdated on this device.'
-        );
-      } else {
-        setErrorMessage(
-          error?.message ||
-            (isRTL ? 'فشل تسجيل الدخول باستخدام Google' : 'Google sign-in failed. Please try again.')
-        );
-      }
-      AppPreferences.notification(Haptics.NotificationFeedbackType.Error);
     } finally {
       setIsGoogleLoading(false);
     }
@@ -242,6 +221,7 @@ export default function RegisterScreen() {
                   style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
                   placeholder={isRTL ? 'أحمد المنصوري' : 'Ahmed Al Mansoori'}
                   placeholderTextColor={colors.neutral.textTertiary}
+                  keyboardAppearance={isDark ? 'dark' : 'light'}
                   value={fullName}
                   onChangeText={(val) => {
                     setFullName(val);
@@ -268,6 +248,7 @@ export default function RegisterScreen() {
                   style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
                   placeholder={isRTL ? 'المنصوري لتجارة المواد ش.ذ.م.م' : 'Al Mansoori Trading LLC'}
                   placeholderTextColor={colors.neutral.textTertiary}
+                  keyboardAppearance={isDark ? 'dark' : 'light'}
                   value={organisationName}
                   onChangeText={(val) => setOrganisationName(val)}
                   autoCorrect={false}
@@ -291,6 +272,7 @@ export default function RegisterScreen() {
                   style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
                   placeholder="founder@company.ae"
                   placeholderTextColor={colors.neutral.textTertiary}
+                  keyboardAppearance={isDark ? 'dark' : 'light'}
                   value={email}
                   onChangeText={(val) => {
                     setEmail(val);
@@ -319,6 +301,7 @@ export default function RegisterScreen() {
                   style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
                   placeholder="+971 50 123 4567"
                   placeholderTextColor={colors.neutral.textTertiary}
+                  keyboardAppearance={isDark ? 'dark' : 'light'}
                   value={phone}
                   onChangeText={(val) => setPhone(val)}
                   keyboardType="phone-pad"
@@ -342,6 +325,7 @@ export default function RegisterScreen() {
                   style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
                   placeholder="••••••••"
                   placeholderTextColor={colors.neutral.textTertiary}
+                  keyboardAppearance={isDark ? 'dark' : 'light'}
                   value={password}
                   onChangeText={(val) => {
                     setPassword(val);
@@ -427,209 +411,210 @@ export default function RegisterScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.neutral.canvas,
-  },
-  keyboardView: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.xl,
-    justifyContent: 'center',
-  },
-  topBar: {
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.lg,
-  },
-  brandRow: {
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  brandLogoBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
-    backgroundColor: colors.brand.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  logoSlantBar1: {
-    position: 'absolute',
-    width: 3,
-    height: 18,
-    backgroundColor: '#FFFFFF',
-    transform: [{ rotate: '25deg' }],
-    left: 11,
-  },
-  logoSlantBar2: {
-    position: 'absolute',
-    width: 3,
-    height: 18,
-    backgroundColor: '#FFFFFF',
-    transform: [{ rotate: '25deg' }],
-    right: 11,
-  },
-  brandTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-    letterSpacing: -0.3,
-  },
-  langBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
-    borderRadius: radii.full,
-    backgroundColor: colors.neutral.surface,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-  },
-  langBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.neutral.textPrimary,
-  },
-  headerSection: {
-    marginBottom: spacing.lg,
-  },
-  heading: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-    letterSpacing: -0.5,
-    marginBottom: 6,
-  },
-  subheading: {
-    fontSize: 14,
-    color: colors.neutral.textSecondary,
-    lineHeight: 20,
-  },
-  errorBanner: {
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.semantic.riskBg,
-    borderColor: colors.semantic.riskBorder,
-    borderWidth: 1,
-    borderRadius: radii.md,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-  },
-  errorText: {
-    flex: 1,
-    fontSize: 13,
-    color: colors.semantic.risk,
-    fontWeight: '500',
-  },
-  formCard: {
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    ...shadows.card,
-  },
-  inputGroup: {
-    marginBottom: spacing.md,
-  },
-  inputLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.neutral.textPrimary,
-    marginBottom: 6,
-  },
-  inputWrapper: {
-    alignItems: 'center',
-    backgroundColor: colors.neutral.canvas,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    paddingHorizontal: spacing.md,
-    height: 48,
-  },
-  input: {
-    flex: 1,
-    fontSize: 15,
-    color: colors.neutral.textPrimary,
-    height: '100%',
-  },
-  eyeBtn: {
-    padding: 6,
-  },
-  primaryButton: {
-    backgroundColor: colors.brand.primary,
-    borderRadius: radii.md,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: spacing.sm,
-    ...shadows.sm,
-  },
-  buttonDisabled: {
-    opacity: 0.65,
-  },
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: spacing.md,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.neutral.border,
-  },
-  dividerText: {
-    paddingHorizontal: spacing.sm,
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.neutral.textTertiary,
-  },
-  googleButton: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    borderRadius: radii.md,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadows.sm,
-  },
-  googleButtonContent: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  googleButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.neutral.textPrimary,
-  },
-  footerRow: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: spacing.lg,
-    gap: 4,
-  },
-  footerText: {
-    fontSize: 14,
-    color: colors.neutral.textSecondary,
-  },
-  footerLink: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.brand.primary,
-  },
-});
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) =>
+  StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      backgroundColor: colors.neutral.canvas,
+    },
+    keyboardView: {
+      flex: 1,
+    },
+    scrollContent: {
+      flexGrow: 1,
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.xl,
+      justifyContent: 'center',
+    },
+    topBar: {
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: spacing.lg,
+    },
+    brandRow: {
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
+    brandLogoBox: {
+      width: 32,
+      height: 32,
+      borderRadius: 9,
+      backgroundColor: colors.brand.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      position: 'relative',
+      overflow: 'hidden',
+    },
+    logoSlantBar1: {
+      position: 'absolute',
+      width: 3,
+      height: 18,
+      backgroundColor: colors.neutral.onPrimary,
+      transform: [{ rotate: '25deg' }],
+      left: 11,
+    },
+    logoSlantBar2: {
+      position: 'absolute',
+      width: 3,
+      height: 18,
+      backgroundColor: colors.neutral.onPrimary,
+      transform: [{ rotate: '25deg' }],
+      right: 11,
+    },
+    brandTitle: {
+      fontSize: 18,
+      fontWeight: '800',
+      color: colors.neutral.textPrimary,
+      letterSpacing: -0.3,
+    },
+    langBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 6,
+      borderRadius: radii.full,
+      backgroundColor: colors.neutral.surface,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+    },
+    langBtnText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.neutral.textPrimary,
+    },
+    headerSection: {
+      marginBottom: spacing.lg,
+    },
+    heading: {
+      fontSize: 26,
+      fontWeight: '800',
+      color: colors.neutral.textPrimary,
+      letterSpacing: -0.5,
+      marginBottom: 6,
+    },
+    subheading: {
+      fontSize: 14,
+      color: colors.neutral.textSecondary,
+      lineHeight: 20,
+    },
+    errorBanner: {
+      alignItems: 'center',
+      gap: spacing.sm,
+      backgroundColor: colors.semantic.riskBg,
+      borderColor: colors.semantic.riskBorder,
+      borderWidth: 1,
+      borderRadius: radii.md,
+      padding: spacing.md,
+      marginBottom: spacing.md,
+    },
+    errorText: {
+      flex: 1,
+      fontSize: 13,
+      color: colors.semantic.riskText,
+      fontWeight: '500',
+    },
+    formCard: {
+      backgroundColor: colors.neutral.surface,
+      borderRadius: radii.lg,
+      padding: spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+      ...shadows.card,
+    },
+    inputGroup: {
+      marginBottom: spacing.md,
+    },
+    inputLabel: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.neutral.textPrimary,
+      marginBottom: 6,
+    },
+    inputWrapper: {
+      alignItems: 'center',
+      backgroundColor: colors.neutral.surfaceInset,
+      borderRadius: radii.md,
+      borderWidth: 1,
+      borderColor: colors.neutral.border,
+      paddingHorizontal: spacing.md,
+      height: 48,
+    },
+    input: {
+      flex: 1,
+      fontSize: 15,
+      color: colors.neutral.textPrimary,
+      height: '100%',
+    },
+    eyeBtn: {
+      padding: 6,
+    },
+    primaryButton: {
+      backgroundColor: colors.brand.primary,
+      borderRadius: radii.md,
+      height: 48,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: spacing.sm,
+      ...shadows.sm,
+    },
+    buttonDisabled: {
+      opacity: 0.65,
+    },
+    primaryButtonText: {
+      color: colors.neutral.onPrimary,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    dividerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginVertical: spacing.md,
+    },
+    dividerLine: {
+      flex: 1,
+      height: 1,
+      backgroundColor: colors.neutral.border,
+    },
+    dividerText: {
+      paddingHorizontal: spacing.sm,
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.neutral.textTertiary,
+    },
+    googleButton: {
+      backgroundColor: colors.neutral.surfaceRaised,
+      borderWidth: 1,
+      borderColor: colors.neutral.borderStrong,
+      borderRadius: radii.md,
+      height: 48,
+      alignItems: 'center',
+      justifyContent: 'center',
+      ...shadows.sm,
+    },
+    googleButtonContent: {
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    googleButtonText: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: colors.neutral.textPrimary,
+    },
+    footerRow: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: spacing.lg,
+      gap: 4,
+    },
+    footerText: {
+      fontSize: 14,
+      color: colors.neutral.textSecondary,
+    },
+    footerLink: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: colors.brand.primary,
+    },
+  });

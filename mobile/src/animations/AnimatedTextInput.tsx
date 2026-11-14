@@ -20,7 +20,8 @@ import Animated, {
   interpolateColor,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../theme/tokens';
+import { ThemeColors } from '../theme/tokens';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { motionDurations } from './motionTokens';
 import { motionEasings } from './easings';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
@@ -50,6 +51,8 @@ export const AnimatedTextInput: React.FC<AnimatedTextInputProps> = ({
   onBlur,
   ...rest
 }) => {
+  const { colors, isDark } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const isReducedMotion = useReduceMotionPreference();
   const [isFocused, setIsFocused] = useState(false);
   const focusProgress = useSharedValue<number>(0);
@@ -90,7 +93,7 @@ export const AnimatedTextInput: React.FC<AnimatedTextInputProps> = ({
     return {
       borderColor,
     };
-  });
+  }, [colors.neutral.border, colors.brand.primary]);
 
   const hasValue = Boolean(value && value.length > 0);
 
@@ -102,6 +105,7 @@ export const AnimatedTextInput: React.FC<AnimatedTextInputProps> = ({
         onBlur={handleBlur}
         style={[styles.input, style]}
         placeholderTextColor={colors.neutral.textTertiary}
+        keyboardAppearance={isDark ? 'dark' : 'light'}
         {...rest}
       />
       {showClearButton && hasValue && (
@@ -119,24 +123,25 @@ export const AnimatedTextInput: React.FC<AnimatedTextInputProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderRadius: 8,
-    backgroundColor: colors.neutral.surface,
-    paddingHorizontal: 12,
-  },
-  input: {
-    flex: 1,
-    height: 44,
-    fontSize: 14,
-    color: colors.neutral.textPrimary,
-  },
-  clearBtn: {
-    padding: 4,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderWidth: 1.5,
+      borderRadius: 8,
+      backgroundColor: colors.neutral.surface,
+      paddingHorizontal: 12,
+    },
+    input: {
+      flex: 1,
+      height: 44,
+      fontSize: 14,
+      color: colors.neutral.textPrimary,
+    },
+    clearBtn: {
+      padding: 4,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+  });

@@ -10,16 +10,18 @@ import {
   View,
   Text,
   TouchableOpacity,
-  Modal,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from '../../src/components/SafeAreaView';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { AppPreferences } from '../../src/utils/preferences';
+import { ThemeColors, ThemeShadows, radii, spacing, fontStyles } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { AppStorage } from '../../src/utils/storage';
+import { SmoothModal } from '../../src/animations';
 
 interface AcademyCourse {
   id: string;
@@ -115,6 +117,9 @@ const STORAGE_KEY_COMPLETED_COURSES = 'mizan_completed_courses';
 export default function LearnScreen() {
   const router = useRouter();
   const { t, isRTL } = useLocale();
+  // Resolve reactive theme colors, shadows, and dynamic styles
+  const { colors, shadows } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const [completedCourseIds, setCompletedCourseIds] = useState<string[]>([]);
   const [activeCourse, setActiveCourse] = useState<AcademyCourse | null>(null);
@@ -134,18 +139,19 @@ export default function LearnScreen() {
   }, [loadCompletedCourses]);
 
   const handleOpenAi = (initialQuery?: string) => {
-    if (initialQuery) {
-      router.push({
-        pathname: '/learn/chat' as any,
-        params: { initialQuery },
-      });
-    } else {
-      router.push('/learn/chat' as any);
-    }
+    AppPreferences.notification(Haptics.NotificationFeedbackType.Warning);
+    Alert.alert(
+      'Mizan AI • Coming Soon',
+      'The Mizan AI Statutory Query engine is currently undergoing regulatory review with UAE tax authorities to ensure zero-error statutory compliance.\n\nAll interactive micro-courses, quizzes, and deterministic manual tax tools remain fully functional.',
+      [
+        { text: 'Understood' },
+        { text: 'View Preview Banner', onPress: () => router.push('/learn/chat' as any) },
+      ]
+    );
   };
 
   const handleOpenCourseModal = (course: AcademyCourse) => {
-    Haptics.selectionAsync().catch(() => {});
+    AppPreferences.selection();
     setSelectedOption(null);
     setActiveCourse(course);
   };
@@ -157,12 +163,12 @@ export default function LearnScreen() {
       return;
     }
     if (selectedOption !== activeCourse.correctIndex) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Warning);
       Alert.alert('Try Again', 'Review the lesson notes above and select the statutory threshold.');
       return;
     }
 
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
     const next = Array.from(new Set([...completedCourseIds, activeCourse.id]));
     setCompletedCourseIds(next);
     await AppStorage.setItem(STORAGE_KEY_COMPLETED_COURSES, JSON.stringify(next));
@@ -184,7 +190,7 @@ export default function LearnScreen() {
           </View>
         </View>
 
-        {/* AI Assistant Banner */}
+        {/* AI Assistant Banner - Locked behind Coming Soon */}
         <TouchableOpacity
           style={[styles.aiBanner, shadows.card]}
           activeOpacity={0.88}
@@ -194,8 +200,13 @@ export default function LearnScreen() {
             <View style={styles.aiIconWrapper}>
               <Ionicons name="sparkles" size={20} color={colors.brand.burgundy} />
             </View>
-            <View style={styles.aiTag}>
-              <Text style={styles.aiTagText}>{t.learn.groundedInLaw}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={styles.aiTag}>
+                <Text style={styles.aiTagText}>{t.learn.groundedInLaw}</Text>
+              </View>
+              <View style={{ backgroundColor: colors.brand.primaryMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.xs, borderWidth: 1, borderColor: colors.brand.primaryLight }}>
+                <Text style={{ fontSize: 9, fontWeight: '800', color: colors.brand.primary }}>COMING SOON</Text>
+              </View>
             </View>
           </View>
           <Text style={[styles.aiTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
@@ -311,7 +322,7 @@ export default function LearnScreen() {
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                     {isCompleted && (
                       <View style={styles.completedChip}>
-                        <Ionicons name="checkmark-circle" size={12} color={colors.semantic.successDark} />
+                        <Ionicons name="checkmark-circle" size={12} color={colors.semantic.successText} />
                         <Text style={styles.completedChipText}>Completed</Text>
                       </View>
                     )}
@@ -336,16 +347,16 @@ export default function LearnScreen() {
       </ScrollView>
 
       {/* Interactive Micro-Course & Quiz Modal */}
-      <Modal visible={!!activeCourse} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalTitle} numberOfLines={1}>
-                {activeCourse?.title}
-              </Text>
-              <TouchableOpacity onPress={() => setActiveCourse(null)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
+      <SmoothModal visible={!!activeCourse} onClose={() => setActiveCourse(null)} maxWidth={460}>
+        {/* SmoothModal already supplies the themed outer card surface & border */}
+        <View style={{ width: '100%' }}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle} numberOfLines={1}>
+              {activeCourse?.title}
+            </Text>
+            <TouchableOpacity onPress={() => setActiveCourse(null)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
             </View>
 
             {activeCourse && (
@@ -370,7 +381,7 @@ export default function LearnScreen() {
                         key={idx}
                         style={[styles.quizOptionRow, isSel && styles.quizOptionActive]}
                         onPress={() => {
-                          Haptics.selectionAsync().catch(() => {});
+                          AppPreferences.selection();
                           setSelectedOption(idx);
                         }}
                       >
@@ -403,25 +414,27 @@ export default function LearnScreen() {
                   <TouchableOpacity
                     style={styles.askAiCourseBtn}
                     onPress={() => {
-                      const q = activeCourse.aiPrompt;
-                      setActiveCourse(null);
-                      handleOpenAi(q);
+                      Alert.alert(
+                        'Mizan AI • Coming Soon',
+                        'The Mizan AI Statutory Query engine is in private regulatory preview with UAE authorities. Please refer to the statutory citations in the lesson above.',
+                        [{ text: 'Understood' }]
+                      );
                     }}
                   >
                     <Ionicons name="sparkles" size={16} color={colors.brand.burgundy} />
-                    <Text style={styles.askAiCourseBtnText}>Ask Mizan AI About This Topic →</Text>
+                    <Text style={styles.askAiCourseBtnText}>Statutory Query • Coming Soon</Text>
                   </TouchableOpacity>
                 </View>
               </ScrollView>
             )}
           </View>
-        </View>
-      </Modal>
+      </SmoothModal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic theme-aware stylesheet factory for LearnScreen
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -439,8 +452,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   title: {
+    ...fontStyles.displayBold,
     fontSize: 24,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   badge: {
@@ -450,8 +463,8 @@ const styles = StyleSheet.create({
     borderRadius: radii.pill,
   },
   badgeText: {
+    ...fontStyles.bodyBold,
     fontSize: 12,
-    fontWeight: '700',
     color: colors.brand.burgundy,
   },
   aiBanner: {
@@ -470,31 +483,32 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: colors.brand.blushSoft,
+    backgroundColor: colors.neutral.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
   aiTag: {
-    backgroundColor: 'rgba(0, 229, 255, 0.18)',
+    // High-contrast frosted pill on primary orange AI banner in both Light & Dark modes
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
     borderRadius: radii.pill,
   },
   aiTagText: {
-    color: colors.brand.cyan,
+    color: colors.neutral.onPrimary,
     fontSize: 10,
     fontWeight: '700',
   },
   aiTitle: {
+    ...fontStyles.displayBold,
     fontSize: 18,
-    fontWeight: '700',
-    color: colors.neutral.white,
+    color: colors.neutral.onPrimary,
     marginBottom: spacing.xs,
   },
   aiDesc: {
     fontSize: 13,
     lineHeight: 18,
-    color: colors.brand.blushAlt,
+    color: 'rgba(255, 255, 255, 0.88)',
     marginBottom: spacing.lg,
   },
   aiPromptBar: {
@@ -516,13 +530,13 @@ const styles = StyleSheet.create({
     borderRadius: radii.pill,
   },
   aiSendText: {
-    color: colors.neutral.white,
+    color: colors.neutral.onPrimary,
     fontSize: 12,
     fontWeight: '700',
   },
   sectionTitle: {
+    ...fontStyles.displaySemiBold,
     fontSize: 16,
-    fontWeight: '700',
     color: colors.neutral.textPrimary,
     marginHorizontal: spacing.lg,
     marginBottom: spacing.md,
@@ -602,11 +616,11 @@ const styles = StyleSheet.create({
   completedChipText: {
     fontSize: 10,
     fontWeight: '700',
-    color: colors.semantic.successDark,
+    color: colors.semantic.successText,
   },
   courseTitle: {
+    ...fontStyles.bodyBold,
     fontSize: 15,
-    fontWeight: '700',
     color: colors.neutral.textPrimary,
     marginBottom: spacing.xs,
   },
@@ -648,8 +662,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   modalTitle: {
+    ...fontStyles.displayBold,
     fontSize: 16,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
     flex: 1,
   },
@@ -662,8 +676,8 @@ const styles = StyleSheet.create({
     borderColor: colors.neutral.border,
   },
   lessonTitle: {
+    ...fontStyles.bodyBold,
     fontSize: 13,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
     marginBottom: 4,
   },
@@ -679,11 +693,11 @@ const styles = StyleSheet.create({
     color: colors.brand.burgundy,
   },
   quizBox: {
-    backgroundColor: '#FFF8F4',
+    backgroundColor: colors.brand.blushSoft,
     borderRadius: radii.md,
     padding: 12,
     borderWidth: 1,
-    borderColor: '#FED7AA',
+    borderColor: colors.brand.blushAlt,
   },
   quizHeaderLabel: {
     fontSize: 11,
@@ -713,7 +727,7 @@ const styles = StyleSheet.create({
   },
   quizOptionActive: {
     borderColor: colors.brand.primary,
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
   },
   quizOptionText: {
     fontSize: 12,
@@ -727,7 +741,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   completeBtnText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 13,
     fontWeight: '800',
   },

@@ -21,6 +21,7 @@ import * as Haptics from 'expo-haptics';
 import { motionScales } from './motionTokens';
 import { motionSprings } from './easings';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
+import { AppPreferences } from '../utils/preferences';
 
 export interface AnimatedPressableProps extends Omit<PressableProps, 'style'> {
   /**
@@ -63,9 +64,8 @@ export const AnimatedPressable: React.FC<AnimatedPressableProps> = ({
   const handlePressIn = (e: GestureResponderEvent) => {
     if (disabled) return;
 
-    if (enableHaptics) {
-      // Haptics run asynchronously and never block UI gestures
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    if (enableHaptics && AppPreferences.isHapticsEnabled()) {
+      AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
     }
 
     if (!isReducedMotion) {

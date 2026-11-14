@@ -7,7 +7,8 @@
 import React, { useEffect } from 'react';
 import { Tabs, useRouter } from 'expo-router';
 import { StyleSheet } from 'react-native';
-import { colors } from '../../src/theme/tokens';
+import { ThemeColors } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { AnimatedTabButton, AnimatedTabIcon } from '../../src/animations';
@@ -15,6 +16,8 @@ import { AnimatedTabButton, AnimatedTabIcon } from '../../src/animations';
 export default function TabsLayout() {
   const router = useRouter();
   const { t } = useLocale();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const { isAuthenticated, businesses, isLoading } = useBusiness();
 
   useEffect(() => {
@@ -124,26 +127,27 @@ export default function TabsLayout() {
   );
 }
 
-const styles = StyleSheet.create({
-  tabBar: {
-    backgroundColor: colors.neutral.surface,
-    borderTopColor: colors.neutral.border,
-    borderTopWidth: 1,
-    height: 64,
-    paddingBottom: 8,
-    paddingTop: 8,
-    elevation: 10,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-  },
-  tabBarItem: {
-    paddingVertical: 2,
-  },
-  tabBarLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-});
+const createStyles = (colors: ThemeColors, isDark: boolean) =>
+  StyleSheet.create({
+    tabBar: {
+      backgroundColor: colors.neutral.surface,
+      borderTopColor: colors.neutral.border,
+      borderTopWidth: 1,
+      height: 64,
+      paddingBottom: 8,
+      paddingTop: 8,
+      elevation: 10,
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: -3 },
+      shadowOpacity: isDark ? 0.35 : 0.06,
+      shadowRadius: 10,
+    },
+    tabBarItem: {
+      paddingVertical: 2,
+    },
+    tabBarLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      marginTop: 2,
+    },
+  });

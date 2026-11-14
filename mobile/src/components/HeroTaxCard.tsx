@@ -6,7 +6,8 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radii, shadows, spacing } from '../theme/tokens';
+import { ThemeColors, radii, spacing } from '../theme/tokens';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { useLocale } from '../context/LocaleContext';
 import { useAnimatedNumber } from '../hooks/useAnimatedNumber';
 import { AnimatedProgressBar } from '../animations';
@@ -32,6 +33,8 @@ export const HeroTaxCard: React.FC<HeroTaxCardProps> = ({
   taxRegime,
 }) => {
   const { t, isRTL } = useLocale();
+  const { colors, shadows } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   // Animated counters for smooth fintech number presentation
   const animatedCt = useAnimatedNumber(corporateTaxAmount, 900);
@@ -166,224 +169,225 @@ export const HeroTaxCard: React.FC<HeroTaxCardProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  cardContainer: {
-    backgroundColor: colors.brand.burgundyDark,
-    borderRadius: radii.xl,
-    padding: spacing.xl,
-    marginHorizontal: spacing.lg,
-    marginVertical: spacing.md,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  cyanGlowOrb: {
-    position: 'absolute',
-    top: -40,
-    right: -40,
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: 'rgba(0, 229, 255, 0.08)',
-  },
-  burgundyDepthOrb: {
-    position: 'absolute',
-    bottom: -50,
-    left: -30,
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: colors.brand.burgundy,
-    opacity: 0.8,
-  },
-  topRow: {
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
-  businessBadge: {
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.xs,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.18)',
-  },
-  businessBadgeText: {
-    color: colors.neutral.white,
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 0.3,
-  },
-  dateText: {
-    color: colors.brand.blushAlt,
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 0.5,
-  },
-  metricLabel: {
-    color: colors.brand.blush,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-    marginBottom: spacing.xs,
-  },
-  amountRow: {
-    alignItems: 'baseline',
-    marginBottom: spacing.xs,
-  },
-  currencyPrefix: {
-    color: colors.brand.cyan,
-    fontSize: 20,
-    fontWeight: '700',
-    marginRight: spacing.xs + 2,
-  },
-  primaryAmount: {
-    color: colors.neutral.white,
-    fontSize: 36,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-  },
-  captionSubtitle: {
-    color: colors.brand.blushAlt,
-    fontSize: 12,
-    marginBottom: spacing.md,
-  },
-  sbrMeterContainer: {
-    backgroundColor: 'rgba(0, 0, 0, 0.28)',
-    borderRadius: radii.lg,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 229, 255, 0.22)',
-  },
-  sbrMeterHeader: {
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.xs + 2,
-  },
-  sbrHeaderLeft: {
-    alignItems: 'center',
-    gap: 4,
-  },
-  sbrMeterTitle: {
-    color: colors.brand.cyan,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.6,
-  },
-  sbrMeterPercent: {
-    color: colors.neutral.white,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  progressBarTrack: {
-    height: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    borderRadius: 3,
-    overflow: 'hidden',
-    marginVertical: 4,
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: colors.brand.cyan,
-    borderRadius: 3,
-  },
-  sbrMeterFooter: {
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: spacing.xs,
-  },
-  sbrSubtext: {
-    color: colors.brand.blushAlt,
-    fontSize: 10,
-    fontWeight: '500',
-    flex: 1,
-  },
-  sbrActivePill: {
-    backgroundColor: 'rgba(0, 229, 255, 0.2)',
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: colors.brand.cyan,
-  },
-  sbrActivePillText: {
-    color: colors.brand.cyan,
-    fontSize: 9,
-    fontWeight: '800',
-  },
-  splitMetricsRow: {
-    backgroundColor: 'rgba(0, 0, 0, 0.22)',
-    borderRadius: radii.lg,
-    padding: spacing.md,
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
-  metricSubBox: {
-    flex: 1,
-    alignItems: 'flex-start',
-  },
-  metricDivider: {
-    width: 1,
-    height: '80%',
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    marginHorizontal: spacing.sm,
-  },
-  subBoxLabel: {
-    color: colors.brand.blush,
-    fontSize: 11,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  subBoxValue: {
-    color: colors.neutral.white,
-    fontSize: 17,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  sbrPill: {
-    backgroundColor: 'rgba(0, 229, 255, 0.18)',
-    paddingHorizontal: spacing.xs + 2,
-    paddingVertical: 2,
-    borderRadius: radii.pill,
-  },
-  sbrPillText: {
-    color: colors.brand.cyan,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  vatDuePill: {
-    backgroundColor: 'rgba(255, 180, 193, 0.22)',
-    paddingHorizontal: spacing.xs + 2,
-    paddingVertical: 2,
-    borderRadius: radii.pill,
-  },
-  vatDuePillText: {
-    color: colors.brand.blushAlt,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  footerBar: {
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.12)',
-    paddingTop: spacing.md,
-    justifyContent: 'space-between',
-  },
-  footerStatItem: {
-    alignItems: 'flex-start',
-  },
-  footerStatLabel: {
-    color: colors.brand.blushAlt,
-    fontSize: 10,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  footerStatValue: {
-    color: colors.neutral.white,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    cardContainer: {
+      backgroundColor: colors.brand.darkHero,
+      borderRadius: radii.xl,
+      padding: spacing.xl,
+      marginHorizontal: spacing.lg,
+      marginVertical: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.brand.darkHeroBorder,
+      overflow: 'hidden',
+      position: 'relative',
+    },
+    cyanGlowOrb: {
+      position: 'absolute',
+      top: -40,
+      right: -40,
+      width: 140,
+      height: 140,
+      borderRadius: 70,
+      backgroundColor: 'rgba(249, 87, 0, 0.12)',
+    },
+    burgundyDepthOrb: {
+      position: 'absolute',
+      bottom: -50,
+      left: -30,
+      width: 160,
+      height: 160,
+      borderRadius: 80,
+      backgroundColor: colors.brand.darkHeroElevated,
+      opacity: 0.85,
+    },
+    topRow: {
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: spacing.md,
+    },
+    businessBadge: {
+      backgroundColor: 'rgba(255, 255, 255, 0.10)',
+      paddingHorizontal: spacing.sm + 2,
+      paddingVertical: spacing.xs,
+      borderRadius: radii.pill,
+      borderWidth: 1,
+      borderColor: 'rgba(255, 255, 255, 0.16)',
+    },
+    businessBadgeText: {
+      color: colors.neutral.white,
+      fontSize: 11,
+      fontWeight: '600',
+      letterSpacing: 0.3,
+    },
+    dateText: {
+      color: '#D1D5DB',
+      fontSize: 11,
+      fontWeight: '600',
+      letterSpacing: 0.5,
+    },
+    metricLabel: {
+      color: '#E5E7EB',
+      fontSize: 12,
+      fontWeight: '700',
+      letterSpacing: 1.2,
+      marginBottom: spacing.xs,
+    },
+    amountRow: {
+      alignItems: 'baseline',
+      marginBottom: spacing.xs,
+    },
+    currencyPrefix: {
+      color: colors.brand.primary,
+      fontSize: 20,
+      fontWeight: '700',
+      marginRight: spacing.xs + 2,
+    },
+    primaryAmount: {
+      color: colors.neutral.white,
+      fontSize: 36,
+      fontWeight: '800',
+      letterSpacing: -0.5,
+    },
+    captionSubtitle: {
+      color: '#9CA3AF',
+      fontSize: 12,
+      marginBottom: spacing.md,
+    },
+    sbrMeterContainer: {
+      backgroundColor: 'rgba(0, 0, 0, 0.28)',
+      borderRadius: radii.lg,
+      padding: spacing.md,
+      marginBottom: spacing.md,
+      borderWidth: 1,
+      borderColor: 'rgba(249, 87, 0, 0.28)',
+    },
+    sbrMeterHeader: {
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: spacing.xs + 2,
+    },
+    sbrHeaderLeft: {
+      alignItems: 'center',
+      gap: 4,
+    },
+    sbrMeterTitle: {
+      color: colors.brand.primaryLight,
+      fontSize: 10,
+      fontWeight: '700',
+      letterSpacing: 0.6,
+    },
+    sbrMeterPercent: {
+      color: colors.neutral.white,
+      fontSize: 11,
+      fontWeight: '600',
+    },
+    progressBarTrack: {
+      height: 6,
+      backgroundColor: 'rgba(255, 255, 255, 0.12)',
+      borderRadius: 3,
+      overflow: 'hidden',
+      marginVertical: 4,
+    },
+    progressBarFill: {
+      height: '100%',
+      backgroundColor: colors.brand.primary,
+      borderRadius: 3,
+    },
+    sbrMeterFooter: {
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginTop: spacing.xs,
+    },
+    sbrSubtext: {
+      color: '#D1D5DB',
+      fontSize: 10,
+      fontWeight: '500',
+      flex: 1,
+    },
+    sbrActivePill: {
+      backgroundColor: 'rgba(249, 87, 0, 0.20)',
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+      borderRadius: radii.pill,
+      borderWidth: 1,
+      borderColor: colors.brand.primary,
+    },
+    sbrActivePillText: {
+      color: colors.brand.primaryLight,
+      fontSize: 9,
+      fontWeight: '800',
+    },
+    splitMetricsRow: {
+      backgroundColor: 'rgba(0, 0, 0, 0.24)',
+      borderRadius: radii.lg,
+      padding: spacing.md,
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: spacing.md,
+    },
+    metricSubBox: {
+      flex: 1,
+      alignItems: 'flex-start',
+    },
+    metricDivider: {
+      width: 1,
+      height: '80%',
+      backgroundColor: 'rgba(255, 255, 255, 0.12)',
+      marginHorizontal: spacing.sm,
+    },
+    subBoxLabel: {
+      color: '#D1D5DB',
+      fontSize: 11,
+      fontWeight: '600',
+      marginBottom: 2,
+    },
+    subBoxValue: {
+      color: colors.neutral.white,
+      fontSize: 17,
+      fontWeight: '700',
+      marginBottom: 4,
+    },
+    sbrPill: {
+      backgroundColor: 'rgba(16, 185, 129, 0.20)',
+      paddingHorizontal: spacing.xs + 2,
+      paddingVertical: 2,
+      borderRadius: radii.pill,
+    },
+    sbrPillText: {
+      color: '#34D399',
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    vatDuePill: {
+      backgroundColor: 'rgba(249, 87, 0, 0.22)',
+      paddingHorizontal: spacing.xs + 2,
+      paddingVertical: 2,
+      borderRadius: radii.pill,
+    },
+    vatDuePillText: {
+      color: '#FDBA74',
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    footerBar: {
+      borderTopWidth: 1,
+      borderTopColor: 'rgba(255, 255, 255, 0.12)',
+      paddingTop: spacing.md,
+      justifyContent: 'space-between',
+    },
+    footerStatItem: {
+      alignItems: 'flex-start',
+    },
+    footerStatLabel: {
+      color: '#9CA3AF',
+      fontSize: 10,
+      fontWeight: '600',
+      marginBottom: 2,
+    },
+    footerStatValue: {
+      color: colors.neutral.white,
+      fontSize: 13,
+      fontWeight: '700',
+    },
+  });

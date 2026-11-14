@@ -8,6 +8,7 @@ import {
   Post,
   Get,
   Patch,
+  Delete,
   Body,
   Param,
   Query,
@@ -111,5 +112,18 @@ export class BusinessController {
   ): Promise<TaxReadinessResponseDto> {
     const rev = revenue ? Number(revenue) : 1200000;
     return this.businessService.assessTaxReadiness(licenseNumber, rev, user.organisationId);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete a registered business entity scoped to user organisation' })
+  @ApiResponse({ status: 200, description: 'Business entity deleted successfully.' })
+  @ApiResponse({ status: 403, description: 'Cross-tenant access forbidden.' })
+  @ApiResponse({ status: 404, description: 'Business not found.' })
+  async deleteBusiness(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser
+  ) {
+    return this.businessService.deleteBusiness(id, user.organisationId);
   }
 }

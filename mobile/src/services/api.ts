@@ -13,6 +13,7 @@ import {
   updateProfile,
   sendPasswordResetEmail,
 } from './firebase';
+import { FirestoreService } from './firestore.service';
 
 export const STORAGE_KEY_AUTH_TOKEN = 'mizan_auth_token';
 export const STORAGE_KEY_ORG_ID = 'mizan_organisation_id';
@@ -478,6 +479,35 @@ export class MizanApi {
       throw new Error(errorData.message || `Failed to update business (HTTP ${res.status})`);
     }
     return res.json();
+  }
+
+  /**
+   * Permanently deletes a business entity across Cloud Firestore and backend
+   */
+  public static async deleteBusiness(id: string): Promise<boolean> {
+    await this.ensureAuthenticated();
+    let firestoreDeleted = false;
+    try {
+      await FirestoreService.deleteBusiness(id);
+      firestoreDeleted = true;
+    } catch (e) {
+      // Continue to API delete
+    }
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/businesses/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: this.getHeaders(),
+      });
+      if (!res.ok && !firestoreDeleted) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || `Failed to delete business (HTTP ${res.status})`);
+      }
+    } catch (err: any) {
+      if (!firestoreDeleted) throw err;
+    }
+
+    return true;
   }
 
   /**

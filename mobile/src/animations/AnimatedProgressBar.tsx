@@ -11,7 +11,7 @@ import Animated, {
   useAnimatedStyle,
   withSpring,
 } from 'react-native-reanimated';
-import { colors } from '../theme/tokens';
+import { useTheme } from '../context/ThemeContext';
 import { motionSprings } from './easings';
 import { useReduceMotionPreference } from './useReduceMotionPreference';
 
@@ -45,15 +45,17 @@ export interface AnimatedProgressBarProps {
 export const AnimatedProgressBar: React.FC<AnimatedProgressBarProps> = ({
   progress,
   height = 6,
-  trackColor = colors.neutral.border,
-  fillColor = colors.brand.primary,
+  trackColor,
+  fillColor,
   barColor,
   style,
 }) => {
+  const { colors } = useTheme();
   const isReducedMotion = useReduceMotionPreference();
   const clamped = Math.max(0, Math.min(progress, 100));
   const progressValue = useSharedValue<number>(clamped);
-  const activeColor = barColor || fillColor;
+  const resolvedTrackColor = trackColor || colors.neutral.border;
+  const activeColor = barColor || fillColor || colors.brand.primary;
 
   useEffect(() => {
     if (isReducedMotion) {
@@ -73,7 +75,7 @@ export const AnimatedProgressBar: React.FC<AnimatedProgressBarProps> = ({
     <View
       style={[
         styles.track,
-        { height, borderRadius: height / 2, backgroundColor: trackColor },
+        { height, borderRadius: height / 2, backgroundColor: resolvedTrackColor },
         style,
       ]}
     >

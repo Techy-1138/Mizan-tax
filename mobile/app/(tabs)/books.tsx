@@ -23,11 +23,23 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { AppPreferences } from '../../src/utils/preferences';
+import { ThemeColors, ThemeShadows, radii, spacing, fontStyles } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { MizanApi } from '../../src/services/api';
 import { AnimatedPressable } from '../../src/animations';
+import { BooksSkeleton } from '../../src/components/Skeleton';
+import { SmoothModal } from '../../src/components/SmoothModal';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+import {
+  parseBankStatementCsv,
+  BankStatementParseResult,
+  ParsedBankTransaction,
+} from '../../src/utils/bankStatementParser';
+import { FirestoreService } from '../../src/services/firestore.service';
 
 type BookTab = 'Overview' | 'Transactions' | 'Ledger' | 'Reports';
 type TxFilterType = 'ALL' | 'INCOME' | 'EXPENSE';
@@ -61,6 +73,9 @@ export default function BooksScreen() {
   const router = useRouter();
   const { isRTL } = useLocale();
   const { activeBusiness } = useBusiness();
+  // Resolve theme palette & dynamic styles for Light/Dark reactivity
+  const { colors, isDark } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const [activeTab, setActiveTab] = useState<BookTab>('Overview');
   const [searchTx, setSearchTx] = useState('');
@@ -77,6 +92,162 @@ export default function BooksScreen() {
   const [invoices, setInvoices] = useState<any[]>([]);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [expenseSummary, setExpenseSummary] = useState<any>(null);
+
+  // Bank Statement CSV Importer State (Deterministic / Zero Gemini API dependency)
+  const [importResult, setImportResult] = useState<BankStatementParseResult | null>(null);
+  const [selectedImportTxIds, setSelectedImportTxIds] = useState<string[]>([]);
+  const [importModalVisible, setImportModalVisible] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+
+  /**
+   * Prompts user to pick a bank statement CSV or Excel export from local files.
+   * Deterministically parses transaction rows and detects bank format (ENBD, ADCB, FAB, Wio, etc.)
+   * without sending any private banking data to external LLMs.
+   */
+  const handlePickBankStatement = async () => {
+    try {
+      AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
+      const res = await DocumentPicker.getDocumentAsync({
+        type: ['*/*'],
+        copyToCacheDirectory: true,
+      });
+
+      if (res.canceled || !res.assets || res.assets.length === 0) {
+        return;
+      }
+
+      const file = res.assets[0];
+      const fileUri = file.uri;
+      const content = await FileSystem.readAsStringAsync(fileUri);
+
+      if (!content || content.trim().length === 0) {
+        Alert.alert('Empty File', 'The selected statement file appears to be empty.');
+        return;
+      }
+
+      // Run 100% deterministic local parser with official CBUAE exchange rates
+      const parseResult = parseBankStatementCsv(content);
+      if (parseResult.parsedTransactions.length === 0) {
+        Alert.alert(
+          'No Transactions Found',
+          'Could not parse valid transactions from the selected file. Please verify it is a CSV or table-formatted bank statement.'
+        );
+        return;
+      }
+
+      setImportResult(parseResult);
+      setSelectedImportTxIds(parseResult.parsedTransactions.map((t) => t.id));
+      setImportModalVisible(true);
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
+    } catch (err: any) {
+      console.warn('Bank statement parse error:', err);
+      Alert.alert('Import Failed', err?.message || 'Could not parse bank statement.');
+    }
+  };
+
+  /**
+   * Toggles selection of individual parsed bank statement rows for reconciliation
+   */
+  const toggleSelectImportTx = (id: string) => {
+    AppPreferences.selection();
+    setSelectedImportTxIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  };
+
+  /**
+   * Toggles select-all across all parsed bank statement rows
+   */
+  const toggleSelectAllImport = () => {
+    AppPreferences.selection();
+    if (!importResult) return;
+    if (selectedImportTxIds.length === importResult.parsedTransactions.length) {
+      setSelectedImportTxIds([]);
+    } else {
+      setSelectedImportTxIds(importResult.parsedTransactions.map((t) => t.id));
+    }
+  };
+
+  /**
+   * Commits the selected parsed bank statement transactions to Cloud Firestore
+   * and Mizan backend API with statutory Article 32 Entertainment disallowance & VAT recovery rules.
+   */
+  const handleCommitBankStatement = async () => {
+    if (!activeBusiness?.id || !importResult) return;
+    const txToCommit = importResult.parsedTransactions.filter((t) => selectedImportTxIds.includes(t.id));
+    if (txToCommit.length === 0) {
+      Alert.alert('No Transactions Selected', 'Please select at least one transaction to commit to your books.');
+      return;
+    }
+
+    setIsImporting(true);
+    let successCount = 0;
+    try {
+      for (const tx of txToCommit) {
+        if (tx.type === 'EXPENSE') {
+          // Persist directly to Firestore
+          try {
+            await FirestoreService.saveExpense(activeBusiness.id, {
+              merchantName: tx.description,
+              amount: tx.amountAED,
+              date: tx.date,
+              category: tx.category,
+              isEntertainmentSplit: tx.isEntertainmentSplit,
+              notes: `Imported from ${importResult.bankName} Statement (${tx.originalCurrency} ${tx.originalAmount} @ ${tx.exchangeRate})`,
+            });
+          } catch (fsErr) {
+            console.warn('Firestore direct write fallback:', fsErr);
+          }
+
+          // Persist to backend API
+          try {
+            await MizanApi.createManualExpense({
+              businessId: activeBusiness.id,
+              supplierName: tx.description,
+              totalAmount: tx.amountAED,
+              expenseDate: tx.date,
+              category: tx.category,
+              notes: `Imported from ${importResult.bankName} statement (${tx.originalCurrency} ${tx.originalAmount} @ ${tx.exchangeRate})`,
+              currency: tx.originalCurrency,
+              exchangeRate: tx.exchangeRate,
+              isEntertainmentSplit: tx.isEntertainmentSplit,
+            });
+          } catch (apiErr) {
+            console.warn('Backend API expense fallback:', apiErr);
+          }
+
+          successCount++;
+        } else {
+          // Inflow / Revenue Invoice
+          try {
+            await FirestoreService.saveInvoice(activeBusiness.id, {
+              customerName: tx.description,
+              totalAmount: tx.amountAED,
+              subtotal: tx.amountAED,
+              issueDate: tx.date,
+              currency: tx.originalCurrency,
+            });
+          } catch (invErr) {
+            console.warn('Firestore invoice write fallback:', invErr);
+          }
+          successCount++;
+        }
+      }
+
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        'Statement Imported Successfully',
+        `Successfully imported ${successCount} transactions into your books from ${importResult.bankName}.`
+      );
+      setImportModalVisible(false);
+      setImportResult(null);
+      await fetchLedgerData();
+    } catch (err: any) {
+      Alert.alert('Import Error', err?.message || 'Failed to commit statement transactions.');
+    } finally {
+      setIsImporting(false);
+    }
+  };
 
   const fetchLedgerData = useCallback(async () => {
     if (!activeBusiness?.id) {
@@ -290,7 +461,7 @@ export default function BooksScreen() {
   const handleExportBookReport = async (reportCode: string, reportTitle: string) => {
     setExportingReport(reportCode);
     try {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
       let html = '';
       if (activeBusiness?.id) {
         try {
@@ -382,6 +553,14 @@ export default function BooksScreen() {
 
         <View style={styles.headerActions}>
           <TouchableOpacity
+            style={styles.headerImportBtn}
+            onPress={handlePickBankStatement}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="document-text-outline" size={16} color={colors.brand.primary} style={{ marginRight: 4 }} />
+            <Text style={styles.headerImportBtnText}>Import CSV</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
             style={styles.headerIconBtn}
             onPress={() => router.push('/expenses/review')}
             activeOpacity={0.7}
@@ -431,7 +610,7 @@ export default function BooksScreen() {
                 key={tab}
                 style={[styles.segmentPill, isSelected && styles.segmentPillActive]}
                 onPress={() => {
-                  Haptics.selectionAsync().catch(() => {});
+                  AppPreferences.selection();
                   setActiveTab(tab);
                 }}
                 activeOpacity={0.8}
@@ -451,7 +630,7 @@ export default function BooksScreen() {
           style={styles.fyDropdown}
           activeOpacity={0.75}
           onPress={() => {
-            Haptics.selectionAsync().catch(() => {});
+            AppPreferences.selection();
             setPeriodModalOpen(true);
           }}
         >
@@ -463,10 +642,7 @@ export default function BooksScreen() {
         </TouchableOpacity>
 
         {isLoading ? (
-          <View style={styles.loadingBox}>
-            <ActivityIndicator size="large" color={colors.brand.primary} />
-            <Text style={styles.loadingText}>Syncing books & ledger records...</Text>
-          </View>
+          <BooksSkeleton />
         ) : (
           <>
             {/* ==================================================================== */}
@@ -625,11 +801,18 @@ export default function BooksScreen() {
                   </View>
                 )}
 
-                {/* Ask Mizan AI Banner */}
+                {/* Ask Mizan AI Banner - Locked behind Coming Soon */}
                 <AnimatedPressable
                   style={styles.aiBannerCard}
                   activeScale={0.98}
-                  onPress={() => router.push('/learn/chat')}
+                  onPress={() => {
+                    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
+                    Alert.alert(
+                      'Mizan AI Tax Advisor — Coming Soon',
+                      'Statutory AI ledger audit & tax deductibility advice is currently in private regulatory preview. Please use the verified manual transaction drill-down and journal vouchers below.',
+                      [{ text: 'OK' }]
+                    );
+                  }}
                 >
                   <View style={styles.aiBannerLeft}>
                     <View style={styles.aiBannerTitleRow}>
@@ -637,14 +820,17 @@ export default function BooksScreen() {
                       <Text style={styles.aiBannerTitle}>
                         Ask Mizan <Text style={{ color: colors.brand.primary }}>AI</Text>
                       </Text>
+                      <View style={{ backgroundColor: colors.brand.primaryMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.xs, borderWidth: 1, borderColor: colors.brand.primaryLight, marginLeft: 6 }}>
+                        <Text style={{ fontSize: 9, fontWeight: '800', color: colors.brand.primary }}>COMING SOON</Text>
+                      </View>
                     </View>
                     <Text style={styles.aiBannerDesc}>
-                      Analyse your books, check VAT recoverability, or review Corporate Tax deductibility.
+                      Automated legal tax deductibility checks and statutory ledger reviews (Regulatory Preview).
                     </Text>
                   </View>
-                  <View style={styles.askNowBtn}>
-                    <Text style={styles.askNowBtnText}>Ask Now</Text>
-                    <Ionicons name="arrow-forward" size={14} color={colors.neutral.textPrimary} />
+                  <View style={[styles.askNowBtn, { opacity: 0.85 }]}>
+                    <Ionicons name="lock-closed" size={12} color={colors.neutral.textSecondary} style={{ marginRight: 4 }} />
+                    <Text style={styles.askNowBtnText}>Preview</Text>
                   </View>
                 </AnimatedPressable>
               </View>
@@ -662,6 +848,26 @@ export default function BooksScreen() {
                   </Text>
                 </View>
 
+                {/* Import Statement Banner Card */}
+                <TouchableOpacity
+                  style={styles.importBannerBtn}
+                  onPress={handlePickBankStatement}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.importBannerLeft}>
+                    <View style={styles.importIconCircle}>
+                      <Ionicons name="cloud-upload" size={18} color={colors.neutral.onPrimary} />
+                    </View>
+                    <View style={{ marginLeft: 10, flex: 1 }}>
+                      <Text style={styles.importBannerTitle}>Import Bank Statement (CSV)</Text>
+                      <Text style={styles.importBannerSub}>
+                        Deterministic parsing for ENBD, ADCB, FAB, Wio with official CBUAE rates
+                      </Text>
+                    </View>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={colors.neutral.textSecondary} />
+                </TouchableOpacity>
+
                 {/* Search Input */}
                 <View style={styles.txSearchBox}>
                   <Ionicons name="search" size={18} color={colors.neutral.textTertiary} />
@@ -669,6 +875,7 @@ export default function BooksScreen() {
                     style={styles.txSearchInput}
                     placeholder="Search vendor, customer, amount..."
                     placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                     value={searchTx}
                     onChangeText={setSearchTx}
                   />
@@ -711,16 +918,26 @@ export default function BooksScreen() {
 
                 {/* Income vs Expenses Summary Banner */}
                 <View style={styles.twoColumnGrid}>
-                  <View style={[styles.statBannerCard, { backgroundColor: '#F0FDF4' }]}>
+                  <View
+                    style={[
+                      styles.statBannerCard,
+                      { backgroundColor: colors.semantic.successBg, borderColor: colors.semantic.successBorder },
+                    ]}
+                  >
                     <Text style={styles.statBannerLabel}>↑ Income</Text>
-                    <Text style={[styles.statBannerAmount, { color: colors.semantic.successDark }]}>
+                    <Text style={[styles.statBannerAmount, { color: colors.semantic.successText }]}>
                       AED {totalIncomeAED.toLocaleString()}
                     </Text>
                   </View>
 
-                  <View style={[styles.statBannerCard, { backgroundColor: '#FEF2F2' }]}>
+                  <View
+                    style={[
+                      styles.statBannerCard,
+                      { backgroundColor: colors.semantic.riskBg, borderColor: colors.semantic.riskBorder },
+                    ]}
+                  >
                     <Text style={styles.statBannerLabel}>↓ Expenses</Text>
-                    <Text style={[styles.statBannerAmount, { color: colors.semantic.risk }]}>
+                    <Text style={[styles.statBannerAmount, { color: colors.semantic.riskText }]}>
                       AED {totalExpensesAED.toLocaleString()}
                     </Text>
                   </View>
@@ -745,7 +962,7 @@ export default function BooksScreen() {
                         style={styles.txCard}
                         activeOpacity={0.75}
                         onPress={() => {
-                          Haptics.selectionAsync().catch(() => {});
+                          AppPreferences.selection();
                           setSelectedTx(tx);
                         }}
                       >
@@ -753,8 +970,8 @@ export default function BooksScreen() {
                           style={[
                             styles.txIconSquare,
                             tx.type === 'INCOME'
-                              ? { backgroundColor: '#F0FDF4' }
-                              : { backgroundColor: '#FFF7ED' },
+                              ? { backgroundColor: colors.semantic.successBg }
+                              : { backgroundColor: colors.brand.primaryMuted },
                           ]}
                         >
                           <Ionicons
@@ -829,7 +1046,7 @@ export default function BooksScreen() {
                   style={styles.exportActionBtn}
                   onPress={() => handleExportBookReport('TRIAL_BALANCE', 'Trial Balance & General Ledger')}
                 >
-                  <Ionicons name="download-outline" size={18} color="#FFFFFF" />
+                  <Ionicons name="download-outline" size={18} color={colors.neutral.onPrimary} />
                   <Text style={styles.exportActionBtnText}>Download Trial Balance PDF</Text>
                 </TouchableOpacity>
               </View>
@@ -882,10 +1099,10 @@ export default function BooksScreen() {
                       disabled={exportingReport === rep.code}
                     >
                       {exportingReport === rep.code ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
+                        <ActivityIndicator size="small" color={colors.neutral.onPrimary} />
                       ) : (
                         <>
-                          <Ionicons name="share-outline" size={16} color="#FFFFFF" />
+                          <Ionicons name="share-outline" size={16} color={colors.neutral.onPrimary} />
                           <Text style={styles.exportActionBtnText}>Generate & Share PDF</Text>
                         </>
                       )}
@@ -903,99 +1120,271 @@ export default function BooksScreen() {
       {/* ==================================================================== */}
       {/* MODAL 1: FISCAL PERIOD PICKER                                         */}
       {/* ==================================================================== */}
-      <Modal visible={periodModalOpen} animationType="fade" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalTitle}>Select Fiscal Period</Text>
-              <TouchableOpacity onPress={() => setPeriodModalOpen(false)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
-            </View>
-
-            {FISCAL_PERIODS.map((p) => {
-              const active = selectedPeriod === p;
-              return (
-                <TouchableOpacity
-                  key={p}
-                  style={[styles.periodOptionRow, active && styles.periodOptionActive]}
-                  onPress={() => {
-                    Haptics.selectionAsync().catch(() => {});
-                    setSelectedPeriod(p);
-                    setPeriodModalOpen(false);
-                  }}
-                >
-                  <Text style={[styles.periodOptionText, active && { color: colors.brand.primary, fontWeight: '800' }]}>
-                    {p}
-                  </Text>
-                  {active && <Ionicons name="checkmark-circle" size={20} color={colors.brand.primary} />}
-                </TouchableOpacity>
-              );
-            })}
+      <SmoothModal
+        visible={periodModalOpen}
+        onClose={() => setPeriodModalOpen(false)}
+        maxWidth={400}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle}>Select Fiscal Period</Text>
+            <TouchableOpacity onPress={() => setPeriodModalOpen(false)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
           </View>
+
+          {FISCAL_PERIODS.map((p) => {
+            const active = selectedPeriod === p;
+            return (
+              <TouchableOpacity
+                key={p}
+                style={[styles.periodOptionRow, active && styles.periodOptionActive]}
+                onPress={() => {
+                  AppPreferences.selection();
+                  setSelectedPeriod(p);
+                  setPeriodModalOpen(false);
+                }}
+              >
+                <Text style={[styles.periodOptionText, active && { color: colors.brand.primary, fontWeight: '800' }]}>
+                  {p}
+                </Text>
+                {active && <Ionicons name="checkmark-circle" size={20} color={colors.brand.primary} />}
+              </TouchableOpacity>
+            );
+          })}
         </View>
-      </Modal>
+      </SmoothModal>
 
       {/* ==================================================================== */}
       {/* MODAL 2: JOURNAL VOUCHER DRILL-DOWN                                   */}
       {/* ==================================================================== */}
-      <Modal visible={!!selectedTx} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <View>
-                <Text style={styles.modalTitle}>Journal Voucher Entry</Text>
-                <Text style={styles.txSubtitle}>{selectedTx?.date} • {selectedTx?.status}</Text>
+      <SmoothModal
+        visible={!!selectedTx}
+        onClose={() => setSelectedTx(null)}
+        maxWidth={460}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeaderRow}>
+            <View>
+              <Text style={styles.modalTitle}>Journal Voucher Entry</Text>
+              <Text style={styles.txSubtitle}>{selectedTx?.date} • {selectedTx?.status}</Text>
+            </View>
+            <TouchableOpacity onPress={() => setSelectedTx(null)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
+          </View>
+
+          {selectedTx && (
+            <View style={{ gap: 10 }}>
+              <View style={styles.voucherBox}>
+                <Text style={styles.coaNameText}>{selectedTx.title}</Text>
+                <Text style={styles.txSubtitle}>{selectedTx.subtitle}</Text>
+                <View style={[styles.itemDivider, { marginVertical: 8 }]} />
+
+                <View style={styles.tableRow}>
+                  <Text style={styles.tableLabel}>Gross Amount</Text>
+                  <Text style={styles.tableValue}>AED {selectedTx.amountAED.toFixed(2)}</Text>
+                </View>
+                <View style={styles.tableRow}>
+                  <Text style={styles.tableLabel}>VAT Component (5%)</Text>
+                  <Text style={styles.tableValue}>AED {selectedTx.vatAmountAED.toFixed(2)}</Text>
+                </View>
+                <View style={styles.tableRow}>
+                  <Text style={styles.tableLabel}>Ledger Account</Text>
+                  <Text style={styles.tableValue}>{selectedTx.category}</Text>
+                </View>
               </View>
-              <TouchableOpacity onPress={() => setSelectedTx(null)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
+
+              <TouchableOpacity
+                style={styles.exportActionBtn}
+                onPress={() => {
+                  const isInc = selectedTx.type === 'INCOME';
+                  setSelectedTx(null);
+                  router.push(isInc ? '/(tabs)/invoices' : '/expenses/review');
+                }}
+              >
+                <Ionicons name="open-outline" size={16} color={colors.neutral.onPrimary} />
+                <Text style={styles.exportActionBtnText}>
+                  {selectedTx.type === 'INCOME' ? 'Open in Invoices Hub' : 'Open in Expense Review'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </SmoothModal>
+
+      {/* ==================================================================== */}
+      {/* MODAL 3: BANK STATEMENT RECONCILIATION & IMPORT                       */}
+      {/* Deterministic / Zero Gemini AI dependency                            */}
+      {/* Supports ESC key and backdrop click dismissal (Rule 12)             */}
+      {/* ==================================================================== */}
+      <SmoothModal
+        visible={importModalVisible}
+        onClose={() => setImportModalVisible(false)}
+        maxWidth={500}
+        maxHeight="92%"
+      >
+        <View style={{ padding: spacing.lg, paddingBottom: spacing.md, maxHeight: '100%' }}>
+          {/* Header */}
+            <View style={styles.modalHeaderRow}>
+              <View style={{ flex: 1, paddingRight: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                  <Text style={styles.modalTitle}>Import Bank Statement</Text>
+                  <View style={styles.bankTag}>
+                    <Text style={styles.bankTagText}>{importResult?.bankName || 'UAE Bank'}</Text>
+                  </View>
+                </View>
+                <Text style={styles.txSubtitle}>
+                  {importResult?.parsedTransactions.length || 0} transactions extracted • CBUAE FX rates
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setImportModalVisible(false)}>
+                <Ionicons name="close" size={24} color={colors.neutral.textPrimary} />
               </TouchableOpacity>
             </View>
 
-            {selectedTx && (
-              <View style={{ gap: 10 }}>
-                <View style={styles.voucherBox}>
-                  <Text style={styles.coaNameText}>{selectedTx.title}</Text>
-                  <Text style={styles.txSubtitle}>{selectedTx.subtitle}</Text>
-                  <View style={[styles.itemDivider, { marginVertical: 8 }]} />
-
-                  <View style={styles.tableRow}>
-                    <Text style={styles.tableLabel}>Gross Amount</Text>
-                    <Text style={styles.tableValue}>AED {selectedTx.amountAED.toFixed(2)}</Text>
-                  </View>
-                  <View style={styles.tableRow}>
-                    <Text style={styles.tableLabel}>VAT Component (5%)</Text>
-                    <Text style={styles.tableValue}>AED {selectedTx.vatAmountAED.toFixed(2)}</Text>
-                  </View>
-                  <View style={styles.tableRow}>
-                    <Text style={styles.tableLabel}>Ledger Account</Text>
-                    <Text style={styles.tableValue}>{selectedTx.category}</Text>
-                  </View>
-                </View>
-
-                <TouchableOpacity
-                  style={styles.exportActionBtn}
-                  onPress={() => {
-                    const isInc = selectedTx.type === 'INCOME';
-                    setSelectedTx(null);
-                    router.push(isInc ? '/(tabs)/invoices' : '/expenses/review');
-                  }}
-                >
-                  <Ionicons name="open-outline" size={16} color="#FFFFFF" />
-                  <Text style={styles.exportActionBtnText}>
-                    {selectedTx.type === 'INCOME' ? 'Open in Invoices Hub' : 'Open in Expense Review'}
+            {/* Reconciliation Totals Banner */}
+            {importResult && (
+              <View style={styles.importStatsCard}>
+                <View style={styles.importStatItem}>
+                  <Text style={styles.importStatLabel}>Total Inflows (Cr)</Text>
+                  <Text style={[styles.importStatVal, { color: colors.semantic.successDark }]}>
+                    AED {importResult.totalCreditsAED.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                   </Text>
-                </TouchableOpacity>
+                </View>
+                <View style={styles.importDivider} />
+                <View style={styles.importStatItem}>
+                  <Text style={styles.importStatLabel}>Total Outflows (Dr)</Text>
+                  <Text style={[styles.importStatVal, { color: colors.semantic.risk }]}>
+                    AED {importResult.totalDebitsAED.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </Text>
+                </View>
+                <View style={styles.importDivider} />
+                <View style={styles.importStatItem}>
+                  <Text style={styles.importStatLabel}>Net Cashflow</Text>
+                  <Text style={[styles.importStatVal, { color: colors.neutral.textPrimary }]}>
+                    AED {importResult.netCashflowAED.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </Text>
+                </View>
               </View>
             )}
-          </View>
+
+            {/* Select All & Multi-Currency Indicator */}
+            <View style={styles.importSubHeader}>
+              <TouchableOpacity
+                style={styles.selectAllBtn}
+                onPress={toggleSelectAllImport}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name={
+                    selectedImportTxIds.length === (importResult?.parsedTransactions.length || 0)
+                      ? 'checkbox'
+                      : 'square-outline'
+                  }
+                  size={18}
+                  color={colors.brand.primary}
+                />
+                <Text style={styles.selectAllText}>
+                  Select All ({selectedImportTxIds.length}/{importResult?.parsedTransactions.length || 0})
+                </Text>
+              </TouchableOpacity>
+
+              {importResult?.currenciesDetected && importResult.currenciesDetected.length > 0 && (
+                <View style={styles.fxTag}>
+                  <Text style={styles.fxTagText}>
+                    {importResult.currenciesDetected.join(', ')}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* Scrollable Transactions List */}
+            <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={true}>
+              {importResult?.parsedTransactions.map((tx) => {
+                const isSelected = selectedImportTxIds.includes(tx.id);
+                const isExpense = tx.type === 'EXPENSE';
+                return (
+                  <TouchableOpacity
+                    key={tx.id}
+                    style={[styles.importTxRow, isSelected && styles.importTxRowActive]}
+                    onPress={() => toggleSelectImportTx(tx.id)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons
+                      name={isSelected ? 'checkbox' : 'square-outline'}
+                      size={20}
+                      color={isSelected ? colors.brand.primary : colors.neutral.textTertiary}
+                      style={{ marginRight: 8 }}
+                    />
+
+                    <View style={{ flex: 1, paddingRight: 6 }}>
+                      <Text style={styles.importTxDesc} numberOfLines={1}>
+                        {tx.description}
+                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2, flexWrap: 'wrap', gap: 4 }}>
+                        <Text style={styles.importTxDate}>{tx.date}</Text>
+                        <View style={[styles.catPill, isExpense ? styles.catPillExpense : styles.catPillIncome]}>
+                          <Text style={styles.catPillText}>{tx.categoryLabel}</Text>
+                        </View>
+                        {tx.isEntertainmentSplit && (
+                          <View style={styles.art32Pill}>
+                            <Text style={styles.art32PillText}>Art. 32 (50% CT / Blocked VAT)</Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={[styles.importTxAmount, { color: isExpense ? colors.neutral.textPrimary : colors.semantic.successDark }]}>
+                        {isExpense ? '-' : '+'}AED {tx.amountAED.toFixed(2)}
+                      </Text>
+                      {tx.originalCurrency !== 'AED' && (
+                        <Text style={styles.importTxFx}>
+                          {tx.originalCurrency} {tx.originalAmount.toFixed(2)}
+                        </Text>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            {/* Commit Action Buttons */}
+            <View style={styles.importActionRow}>
+              <TouchableOpacity
+                style={styles.importCancelBtn}
+                onPress={() => setImportModalVisible(false)}
+                disabled={isImporting}
+              >
+                <Text style={styles.importCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.importCommitBtn}
+                onPress={handleCommitBankStatement}
+                disabled={isImporting || selectedImportTxIds.length === 0}
+              >
+                {isImporting ? (
+                  <ActivityIndicator size="small" color={colors.neutral.onPrimary} />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-done" size={17} color={colors.neutral.onPrimary} style={{ marginRight: 6 }} />
+                    <Text style={styles.importCommitText}>
+                      Commit {selectedImportTxIds.length} to Books
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
         </View>
-      </Modal>
+      </SmoothModal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic theme-aware stylesheet factory for BooksScreen
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -1025,14 +1414,14 @@ const styles = StyleSheet.create({
     borderColor: colors.neutral.border,
   },
   headerTitle: {
+    ...fontStyles.displayBold,
     fontSize: 18,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   headerSubtitle: {
+    ...fontStyles.bodyMedium,
     fontSize: 12,
     color: colors.brand.primary,
-    fontWeight: '600',
     marginTop: 1,
   },
   headerActions: {
@@ -1061,6 +1450,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   bannerSubtitle: {
+    ...fontStyles.bodyRegular,
     fontSize: 14,
     color: colors.neutral.textSecondary,
     lineHeight: 20,
@@ -1091,7 +1481,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textSecondary,
   },
   segmentPillTextActive: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontWeight: '700',
   },
   loadingBox: {
@@ -1129,9 +1519,11 @@ const styles = StyleSheet.create({
     color: colors.neutral.textPrimary,
   },
   perfDarkCard: {
-    backgroundColor: '#0F172A',
+    backgroundColor: colors.brand.darkHero,
     borderRadius: radii.lg,
     padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.brand.darkHeroBorder,
     position: 'relative',
     overflow: 'hidden',
   },
@@ -1142,9 +1534,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   perfTitle: {
+    ...fontStyles.displaySemiBold,
     color: '#FFFFFF',
     fontSize: 15,
-    fontWeight: '700',
   },
   growthBadge: {
     backgroundColor: 'rgba(34, 197, 94, 0.15)',
@@ -1153,9 +1545,9 @@ const styles = StyleSheet.create({
     borderRadius: radii.full,
   },
   growthBadgeText: {
+    ...fontStyles.bodyBold,
     color: '#4ADE80',
     fontSize: 11,
-    fontWeight: '700',
   },
   perfStatsRow: {
     flexDirection: 'row',
@@ -1165,9 +1557,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   perfAmount: {
+    ...fontStyles.monoMedium,
     color: '#FFFFFF',
     fontSize: 18,
-    fontWeight: '800',
   },
   perfSub: {
     color: '#94A3B8',
@@ -1206,7 +1598,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1230,8 +1622,8 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   summaryCardTitle: {
+    ...fontStyles.displaySemiBold,
     fontSize: 15,
-    fontWeight: '700',
     color: colors.neutral.textPrimary,
   },
   tableRow: {
@@ -1264,7 +1656,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.neutral.border,
   },
   marginPill: {
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: radii.full,
@@ -1295,7 +1687,7 @@ const styles = StyleSheet.create({
   },
   progressBarBg: {
     height: 6,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: colors.neutral.surfaceInset,
     borderRadius: 3,
     overflow: 'hidden',
   },
@@ -1306,11 +1698,11 @@ const styles = StyleSheet.create({
   },
   aiBannerCard: {
     flexDirection: 'row',
-    backgroundColor: '#FFF8F4',
+    backgroundColor: colors.brand.blushSoft,
     borderRadius: radii.lg,
     padding: spacing.md,
     borderWidth: 1,
-    borderColor: '#FED7AA',
+    borderColor: colors.brand.blushAlt,
     alignItems: 'center',
     justifyContent: 'space-between',
   },
@@ -1337,7 +1729,7 @@ const styles = StyleSheet.create({
   askNowBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: radii.full,
@@ -1401,7 +1793,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textSecondary,
   },
   miniFilterTextActive: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontWeight: '700',
   },
   twoColumnGrid: {
@@ -1450,11 +1842,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   txTitle: {
+    ...fontStyles.bodyBold,
     fontSize: 13,
-    fontWeight: '700',
     color: colors.neutral.textPrimary,
   },
   txSubtitle: {
+    ...fontStyles.bodyRegular,
     fontSize: 11,
     color: colors.neutral.textSecondary,
     marginTop: 2,
@@ -1463,8 +1856,8 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   txAmount: {
+    ...fontStyles.monoMedium,
     fontSize: 13,
-    fontWeight: '800',
   },
   txTime: {
     fontSize: 10,
@@ -1540,13 +1933,13 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
   },
   exportActionBtnText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 13,
     fontWeight: '800',
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    backgroundColor: colors.neutral.scrim,
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
   },
@@ -1565,8 +1958,8 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   modalTitle: {
+    ...fontStyles.displayBold,
     fontSize: 17,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   periodOptionRow: {
@@ -1582,7 +1975,7 @@ const styles = StyleSheet.create({
   periodOptionActive: {
     borderWidth: 1,
     borderColor: colors.brand.primary,
-    backgroundColor: '#FFF8F4',
+    backgroundColor: colors.brand.blushSoft,
   },
   periodOptionText: {
     fontSize: 13,
@@ -1593,5 +1986,217 @@ const styles = StyleSheet.create({
     backgroundColor: colors.neutral.canvas,
     padding: 14,
     borderRadius: radii.md,
+  },
+  headerImportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.brand.primaryMuted,
+    borderWidth: 1,
+    borderColor: colors.brand.blushAlt,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: radii.full,
+    marginRight: 4,
+  },
+  headerImportBtnText: {
+    color: colors.brand.primary,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  importBannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.neutral.surface,
+    borderWidth: 1,
+    borderColor: colors.neutral.border,
+    borderRadius: radii.lg,
+    padding: 12,
+    marginBottom: 10,
+    ...shadows.sm,
+  },
+  importBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  importIconCircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.brand.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  importBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.neutral.textPrimary,
+  },
+  importBannerSub: {
+    fontSize: 10,
+    color: colors.neutral.textSecondary,
+    marginTop: 2,
+  },
+  bankTag: {
+    backgroundColor: colors.semantic.infoBg,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: colors.semantic.infoBorder,
+  },
+  bankTagText: {
+    color: colors.semantic.infoText,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  importStatsCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.neutral.canvas,
+    borderRadius: radii.md,
+    padding: 10,
+    marginVertical: 10,
+  },
+  importStatItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  importStatLabel: {
+    fontSize: 10,
+    color: colors.neutral.textSecondary,
+    fontWeight: '600',
+  },
+  importStatVal: {
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  importDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: colors.neutral.border,
+  },
+  importSubHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    paddingHorizontal: 2,
+  },
+  selectAllBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  selectAllText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.neutral.textPrimary,
+    marginLeft: 6,
+  },
+  fxTag: {
+    backgroundColor: colors.semantic.warningBg,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radii.sm,
+  },
+  fxTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.semantic.warningText,
+  },
+  importTxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.neutral.border,
+    borderRadius: radii.sm,
+  },
+  importTxRowActive: {
+    backgroundColor: colors.brand.blushSoft,
+  },
+  importTxDesc: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.neutral.textPrimary,
+  },
+  importTxDate: {
+    fontSize: 10,
+    color: colors.neutral.textSecondary,
+  },
+  catPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: radii.xs,
+  },
+  catPillExpense: {
+    backgroundColor: colors.neutral.surfaceInset,
+  },
+  catPillIncome: {
+    backgroundColor: colors.semantic.successBg,
+  },
+  catPillText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: colors.neutral.textSecondary,
+  },
+  art32Pill: {
+    backgroundColor: colors.semantic.riskBg,
+    borderWidth: 1,
+    borderColor: colors.semantic.riskBorder,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: radii.xs,
+  },
+  art32PillText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: colors.semantic.riskText,
+  },
+  importTxAmount: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  importTxFx: {
+    fontSize: 9,
+    color: colors.neutral.textTertiary,
+    marginTop: 2,
+  },
+  importActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+  },
+  importCancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.neutral.canvas,
+  },
+  importCancelText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.neutral.textSecondary,
+  },
+  importCommitBtn: {
+    flex: 2,
+    flexDirection: 'row',
+    paddingVertical: 12,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.brand.primary,
+  },
+  importCommitText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.neutral.onPrimary,
   },
 });

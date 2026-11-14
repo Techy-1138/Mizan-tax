@@ -73,6 +73,9 @@ export interface FirestoreExpense {
   receiptUrl?: string;
   date: string;
   notes?: string;
+  isEntertainmentSplit?: boolean;
+  corporateTaxDeductibleAmount?: number;
+  corporateTaxAddbackAmount?: number;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -255,20 +258,29 @@ export class FirestoreService {
     const expenseRef = doc(db, 'businesses', businessId, 'expenses', expenseId);
 
     const amount = Number(expense.amount || 0);
+    const isEnt = expense.isEntertainmentSplit === true;
     const vatRate = Number(expense.vatRatePercent ?? 5);
-    const vatAmount = expense.vatAmount !== undefined ? Number(expense.vatAmount) : (amount * vatRate) / 100;
+    // Under Article 53 of VAT Executive Regulations, input tax on entertainment is 100% blocked
+    const vatAmount = isEnt
+      ? 0
+      : expense.vatAmount !== undefined
+      ? Number(expense.vatAmount)
+      : (amount * vatRate) / 100;
 
     const record: FirestoreExpense = {
       id: expenseId,
       businessId,
       merchantName: expense.merchantName || 'Supplier LLC',
-      category: expense.category || 'General',
+      category: isEnt ? 'Entertainment & Dining' : expense.category || 'General',
       amount,
       vatAmount,
-      vatRatePercent: vatRate,
+      vatRatePercent: isEnt ? 0 : vatRate,
       receiptUrl: expense.receiptUrl,
       date: expense.date || new Date().toISOString().split('T')[0],
       notes: expense.notes,
+      isEntertainmentSplit: isEnt,
+      corporateTaxDeductibleAmount: isEnt ? amount * 0.5 : amount,
+      corporateTaxAddbackAmount: isEnt ? amount * 0.5 : 0,
       updatedAt: serverTimestamp(),
     };
 
@@ -292,5 +304,37 @@ export class FirestoreService {
       list.push(d.data() as FirestoreExpense);
     });
     return list;
+  }
+
+  /**
+   * Permanently deletes a UAE Business Entity from Firestore
+   */
+  public static async deleteBusiness(businessId: string): Promise<boolean> {
+    this.requireAuthUid();
+    const businessRef = doc(db, 'businesses', businessId);
+    await deleteDoc(businessRef);
+    return true;
+  }
+
+  /**
+   * Persists or updates the authenticated user's profile in Firestore /users/{uid}
+   */
+  public static async saveUserProfile(profile: {
+    displayName?: string;
+    phoneNumber?: string;
+    email?: string;
+  }): Promise<void> {
+    const uid = this.requireAuthUid();
+    const userRef = doc(db, 'users', uid);
+    await setDoc(
+      userRef,
+      {
+        ...profile,
+        id: uid,
+        userId: uid,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
   }
 }

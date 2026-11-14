@@ -14,7 +14,6 @@ import {
   Platform,
   Alert,
   TextInput,
-  Modal,
   ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -23,7 +22,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { MizanApi } from '../../src/services/api';
@@ -32,6 +32,7 @@ import {
   OcrProcessingOverlay,
   AnimatedSwitch,
   AnimatedFinancialNumber,
+  SmoothModal,
 } from '../../src/animations';
 import { AppPreferences } from '../../src/utils/preferences';
 
@@ -45,6 +46,9 @@ export default function ExpenseScanScreen() {
   const router = useRouter();
   const { isRTL } = useLocale();
   const { activeBusiness } = useBusiness();
+  // Theme hook provides reactive palette and keyboardAppearance; camera viewfinder remains dark
+  const { colors, isDark } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<any>(null);
 
@@ -374,7 +378,7 @@ export default function ExpenseScanScreen() {
               onPress={() => setStage('camera')}
               activeOpacity={0.88}
             >
-              <Ionicons name="camera" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+              <Ionicons name="camera" size={20} color={colors.neutral.onPrimary} style={{ marginRight: 8 }} />
               <Text style={styles.primaryActionText}>Scan Receipt (Camera)</Text>
             </TouchableOpacity>
 
@@ -400,7 +404,7 @@ export default function ExpenseScanScreen() {
           {/* Features Card */}
           <View style={styles.featureCard}>
             <View style={styles.featureRow}>
-              <View style={[styles.featureIconBox, { backgroundColor: '#FFF3ED' }]}>
+              <View style={[styles.featureIconBox, { backgroundColor: colors.brand.primaryMuted }]}>
                 <Ionicons name="scan-outline" size={20} color={colors.brand.primary} />
               </View>
               <View style={styles.featureCol}>
@@ -411,8 +415,8 @@ export default function ExpenseScanScreen() {
             <View style={styles.itemDivider} />
 
             <View style={styles.featureRow}>
-              <View style={[styles.featureIconBox, { backgroundColor: '#F0FDF4' }]}>
-                <Ionicons name="shield-checkmark-outline" size={20} color={colors.semantic.successDark} />
+              <View style={[styles.featureIconBox, { backgroundColor: colors.semantic.successBg }]}>
+                <Ionicons name="shield-checkmark-outline" size={20} color={colors.semantic.success} />
               </View>
               <View style={styles.featureCol}>
                 <Text style={styles.featureTitle}>Mandatory User Review</Text>
@@ -422,8 +426,8 @@ export default function ExpenseScanScreen() {
             <View style={styles.itemDivider} />
 
             <View style={styles.featureRow}>
-              <View style={[styles.featureIconBox, { backgroundColor: '#F0F9FF' }]}>
-                <Ionicons name="cash-outline" size={20} color="#0284C7" />
+              <View style={[styles.featureIconBox, { backgroundColor: colors.semantic.infoBg }]}>
+                <Ionicons name="cash-outline" size={20} color={colors.semantic.info} />
               </View>
               <View style={styles.featureCol}>
                 <Text style={styles.featureTitle}>Article 69 CBUAE Currency Peg</Text>
@@ -548,6 +552,8 @@ export default function ExpenseScanScreen() {
                     value={vendorName}
                     onChangeText={setVendorName}
                     placeholder="Enter merchant name"
+                    placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 ) : (
                   <Text style={styles.fieldValue}>{vendorName || 'Not specified'}</Text>
@@ -567,7 +573,9 @@ export default function ExpenseScanScreen() {
                     value={supplierTrn}
                     onChangeText={setSupplierTrn}
                     placeholder="100XXXXXXXXXXXX"
+                    placeholderTextColor={colors.neutral.textTertiary}
                     keyboardType="number-pad"
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 ) : (
                   <Text style={styles.fieldValue}>{supplierTrn || 'Not provided on receipt'}</Text>
@@ -587,6 +595,8 @@ export default function ExpenseScanScreen() {
                     value={receiptDate}
                     onChangeText={setReceiptDate}
                     placeholder="2026-10-15"
+                    placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 ) : (
                   <Text style={styles.fieldValue}>{receiptDate}</Text>
@@ -606,6 +616,8 @@ export default function ExpenseScanScreen() {
                     value={receiptNo}
                     onChangeText={setReceiptNo}
                     placeholder="INV-XXXXX"
+                    placeholderTextColor={colors.neutral.textTertiary}
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 ) : (
                   <Text style={styles.fieldValue}>{receiptNo || 'Unassigned'}</Text>
@@ -645,7 +657,9 @@ export default function ExpenseScanScreen() {
                       setVatAmount(vat);
                       setTotalAmount(num + vat);
                     }}
+                    placeholderTextColor={colors.neutral.textTertiary}
                     keyboardType="numeric"
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 ) : (
                   <AnimatedFinancialNumber value={amountExclVat} decimals={2} style={styles.fieldValue} />
@@ -668,7 +682,9 @@ export default function ExpenseScanScreen() {
                       setVatAmount(num);
                       setTotalAmount(amountExclVat + num);
                     }}
+                    placeholderTextColor={colors.neutral.textTertiary}
                     keyboardType="numeric"
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 ) : (
                   <AnimatedFinancialNumber value={vatAmount} decimals={2} style={styles.fieldValue} />
@@ -693,7 +709,9 @@ export default function ExpenseScanScreen() {
                       setAmountExclVat(sub);
                       setVatAmount(Math.round((num - sub) * 100) / 100);
                     }}
+                    placeholderTextColor={colors.neutral.textTertiary}
                     keyboardType="numeric"
+                    keyboardAppearance={isDark ? 'dark' : 'light'}
                   />
                 ) : (
                   <AnimatedFinancialNumber
@@ -729,7 +747,7 @@ export default function ExpenseScanScreen() {
             activeOpacity={0.88}
           >
             {isSaving ? (
-              <ActivityIndicator color="#FFFFFF" />
+              <ActivityIndicator color={colors.neutral.onPrimary} />
             ) : (
               <Text style={styles.primaryActionText}>Approve & Save to Ledger →</Text>
             )}
@@ -740,40 +758,38 @@ export default function ExpenseScanScreen() {
       )}
 
       {/* Category Selection Modal */}
-      <Modal visible={showCategoryModal} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select UAE Expense Category</Text>
-              <TouchableOpacity onPress={() => setShowCategoryModal(false)}>
-                <Ionicons name="close" size={24} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 400 }}>
-              {categories.map((cat) => (
-                <TouchableOpacity
-                  key={cat.code}
-                  style={[styles.categoryOption, category === cat.code && styles.categoryOptionActive]}
-                  onPress={() => {
-                    setCategory(cat.code);
-                    setCategoryName(cat.nameEn);
-                    setShowCategoryModal(false);
-                  }}
-                >
-                  <Ionicons name={cat.icon || 'pricetag-outline'} size={18} color={colors.brand.primary} />
-                  <View style={{ marginLeft: 12, flex: 1 }}>
-                    <Text style={styles.catOptionName}>{cat.nameEn}</Text>
-                    <Text style={styles.catOptionDesc}>{cat.description}</Text>
-                  </View>
-                  {category === cat.code && (
-                    <Ionicons name="checkmark" size={18} color={colors.brand.primary} />
-                  )}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+      <SmoothModal visible={showCategoryModal} onClose={() => setShowCategoryModal(false)} maxWidth={440}>
+        <View style={[styles.modalContent, { width: '100%', borderRadius: 0 }]}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Select UAE Expense Category</Text>
+            <TouchableOpacity onPress={() => setShowCategoryModal(false)}>
+              <Ionicons name="close" size={24} color={colors.neutral.textPrimary} />
+            </TouchableOpacity>
           </View>
+          <ScrollView style={{ maxHeight: 400 }}>
+            {categories.map((cat) => (
+              <TouchableOpacity
+                key={cat.code}
+                style={[styles.categoryOption, category === cat.code && styles.categoryOptionActive]}
+                onPress={() => {
+                  setCategory(cat.code);
+                  setCategoryName(cat.nameEn);
+                  setShowCategoryModal(false);
+                }}
+              >
+                <Ionicons name={cat.icon || 'pricetag-outline'} size={18} color={colors.brand.primary} />
+                <View style={{ marginLeft: 12, flex: 1 }}>
+                  <Text style={styles.catOptionName}>{cat.nameEn}</Text>
+                  <Text style={styles.catOptionDesc}>{cat.description}</Text>
+                </View>
+                {category === cat.code && (
+                  <Ionicons name="checkmark" size={18} color={colors.brand.primary} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
-      </Modal>
+      </SmoothModal>
 
       {/* Structured OCR Processing Overlay */}
       <OcrProcessingOverlay
@@ -785,7 +801,8 @@ export default function ExpenseScanScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic style factory adapting landing/review cards and modals while keeping camera HUD dark
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -798,7 +815,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.neutral.border,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -825,7 +842,7 @@ const styles = StyleSheet.create({
   editBtnRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: radii.full,
@@ -859,7 +876,7 @@ const styles = StyleSheet.create({
   activeBizBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF8F4',
+    backgroundColor: colors.brand.primaryMuted,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
@@ -886,13 +903,13 @@ const styles = StyleSheet.create({
     ...shadows.sm,
   },
   primaryActionText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontSize: 15,
     fontWeight: '700',
   },
   secondaryActionButton: {
     flexDirection: 'row',
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
     borderWidth: 1,
     borderColor: colors.brand.primary,
     paddingVertical: 13,
@@ -907,7 +924,7 @@ const styles = StyleSheet.create({
   },
   tertiaryActionButton: {
     flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     borderWidth: 1,
     borderColor: colors.neutral.border,
     paddingVertical: 12,
@@ -921,7 +938,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   featureCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     borderRadius: radii.lg,
     padding: spacing.md,
     borderWidth: 1,
@@ -1075,7 +1092,7 @@ const styles = StyleSheet.create({
   },
   receiptPreviewCard: {
     flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     padding: spacing.md,
     borderRadius: radii.lg,
     alignItems: 'center',
@@ -1088,7 +1105,7 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: radii.md,
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
@@ -1109,7 +1126,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   detailsCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     borderRadius: radii.lg,
     padding: spacing.md,
     borderWidth: 1,
@@ -1157,11 +1174,11 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: colors.neutral.scrim,
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surface,
     borderTopLeftRadius: radii.xl,
     borderTopRightRadius: radii.xl,
     padding: spacing.lg,
@@ -1185,7 +1202,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.neutral.border,
   },
   categoryOptionActive: {
-    backgroundColor: '#FFF8F4',
+    backgroundColor: colors.brand.primaryMuted,
   },
   catOptionName: {
     fontSize: 14,

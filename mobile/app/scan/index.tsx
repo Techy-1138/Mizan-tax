@@ -21,7 +21,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, spacing, shadows } from '../../src/theme/tokens';
+import { ThemeColors, radii, spacing, shadows } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { ScannerLaserBeam } from '../../src/components/ScannerLaserBeam';
 import { OcrProcessingOverlay } from '../../src/animations';
@@ -35,6 +36,9 @@ const FRAME_HEIGHT = FRAME_WIDTH * 1.35;
 export default function ScanTradeLicenseScreen() {
   const router = useRouter();
   const { isRTL } = useLocale();
+  // Keep camera viewfinder and shutter bar dark while theming header/banner surfaces
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<any>(null);
 
@@ -381,7 +385,8 @@ export default function ScanTradeLicenseScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic style factory so top banner/header follow theme while camera viewfinder stays dark
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#000000',

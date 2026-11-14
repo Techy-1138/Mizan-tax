@@ -174,6 +174,16 @@ export class CreateManualExpenseDto {
   @IsBoolean()
   isReverseCharge?: boolean;
 
+  /**
+   * Article 32 of Federal Decree-Law No. (47) of 2022 on Corporate Tax:
+   * Entertainment, amusement, or recreation expenditures are limited to a 50% deduction.
+   * Input VAT on client entertainment is also 100% blocked under Article 53 of CD 52/2017.
+   */
+  @ApiProperty({ description: 'Article 32 Entertainment 50% split applied', required: false, default: false })
+  @IsOptional()
+  @IsBoolean()
+  isEntertainmentSplit?: boolean;
+
   @ApiProperty({ description: 'Line items breakdown', type: [ExpenseLineItemDto], required: false })
   @IsOptional()
   @IsArray()
@@ -252,6 +262,16 @@ export class UpdateExpenseDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  /**
+   * Article 32 of Federal Decree-Law No. (47) of 2022 on Corporate Tax:
+   * Entertainment, amusement, or recreation expenditures are limited to a 50% deduction.
+   * Input VAT on client entertainment is also 100% blocked under Article 53 of CD 52/2017.
+   */
+  @ApiProperty({ description: 'Article 32 Entertainment 50% split applied', required: false, default: false })
+  @IsOptional()
+  @IsBoolean()
+  isEntertainmentSplit?: boolean;
 
   @ApiProperty({ description: 'Line items breakdown', type: [ExpenseLineItemDto], required: false })
   @IsOptional()

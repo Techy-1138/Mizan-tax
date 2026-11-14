@@ -13,18 +13,21 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
-  Modal,
+  Alert,
   TextInput,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from '../../src/components/SafeAreaView';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors, radii, shadows, spacing } from '../../src/theme/tokens';
+import { AppPreferences } from '../../src/utils/preferences';
+import { ThemeColors, ThemeShadows, radii, spacing, fontStyles } from '../../src/theme/tokens';
+import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
 import { MizanApi } from '../../src/services/api';
-import { ScreenSection, AnimatedFinancialNumber } from '../../src/animations';
+import { ScreenSection, AnimatedFinancialNumber, SmoothModal } from '../../src/animations';
+import { TaxSkeleton } from '../../src/components/Skeleton';
 
 type TaxTab = 'Overview' | 'Corporate Tax' | 'VAT (201)' | 'SBR';
 
@@ -32,6 +35,9 @@ export default function TaxScreen() {
   const router = useRouter();
   const { isRTL } = useLocale();
   const { activeBusiness } = useBusiness();
+  // Resolve theme palette & dynamic styles for Light/Dark transitions
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const [activeTab, setActiveTab] = useState<TaxTab>('Overview');
   const [loading, setLoading] = useState<boolean>(true);
@@ -113,7 +119,7 @@ export default function TaxScreen() {
   const handleReassess = async (type: 'VAT' | 'CT') => {
     if (!activeBusiness) return;
     try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      AppPreferences.impact(Haptics.ImpactFeedbackStyle.Medium);
       setReassessing(true);
       if (type === 'VAT' && vatAssessment?.assessmentId) {
         const updated = await MizanApi.reassessTaxAssessment(vatAssessment.assessmentId);
@@ -124,7 +130,7 @@ export default function TaxScreen() {
       } else {
         await fetchAssessments();
       }
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
     } catch (err: any) {
       alert(`Reassessment failed: ${err.message}`);
     } finally {
@@ -152,7 +158,7 @@ export default function TaxScreen() {
         isRTL ? 'ar' : 'en'
       );
       setAiResponse(res);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
     } catch (err: any) {
       alert(`AI Consultation failed: ${err.message}`);
     } finally {
@@ -207,14 +213,25 @@ export default function TaxScreen() {
 
         <View style={styles.headerRight}>
           <TouchableOpacity
-            style={styles.headerIconBtn}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 4,
+              backgroundColor: colors.brand.primaryMuted,
+              paddingHorizontal: 10,
+              paddingVertical: 5,
+              borderRadius: radii.pill,
+              borderWidth: 1,
+              borderColor: colors.brand.primaryLight,
+            }}
             onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
               setAiModalVisible(true);
             }}
             activeOpacity={0.7}
           >
-            <Ionicons name="sparkles" size={18} color={colors.brand.primary} />
+            <Ionicons name="sparkles" size={13} color={colors.brand.primary} />
+            <Text style={{ fontSize: 11, fontWeight: '700', color: colors.brand.primary }}>AI • Coming Soon</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -253,7 +270,7 @@ export default function TaxScreen() {
                 key={tab}
                 style={[styles.segmentPill, isSelected && styles.segmentPillActive]}
                 onPress={() => {
-                  Haptics.selectionAsync().catch(() => {});
+                  AppPreferences.selection();
                   setActiveTab(tab);
                 }}
                 activeOpacity={0.8}
@@ -282,7 +299,7 @@ export default function TaxScreen() {
           }}
           activeOpacity={0.75}
           onPress={() => {
-            Haptics.selectionAsync().catch(() => {});
+            AppPreferences.selection();
             setPeriodModalVisible(true);
           }}
         >
@@ -296,10 +313,7 @@ export default function TaxScreen() {
         </TouchableOpacity>
 
         {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={colors.brand.primary} />
-            <Text style={styles.loadingText}>Running statutory tax engines...</Text>
-          </View>
+          <TaxSkeleton />
         ) : (
           <>
             {/* ==================================================================== */}
@@ -312,8 +326,8 @@ export default function TaxScreen() {
                   <View style={styles.taxPositionCard}>
                     <View style={styles.positionHeaderRow}>
                       <Text style={styles.positionYearLabel}>Active Position (FY {selectedFY})</Text>
-                      <View style={[styles.compliantTag, complianceScore < 75 && { backgroundColor: '#FEF3C7' }]}>
-                        <Text style={[styles.compliantTagText, complianceScore < 75 && { color: '#B45309' }]}>
+                      <View style={[styles.compliantTag, complianceScore < 75 && { backgroundColor: colors.semantic.warningBg }]}>
+                        <Text style={[styles.compliantTagText, complianceScore < 75 && { color: colors.semantic.warningText }]}>
                           {complianceScore >= 80 ? 'Compliant' : 'Needs Review'} ({complianceScore}%)
                         </Text>
                       </View>
@@ -568,7 +582,7 @@ export default function TaxScreen() {
                   </View>
                   <View style={styles.itemDivider} />
 
-                  <View style={[styles.tableRow, { backgroundColor: '#F8FAFC', paddingVertical: 8, paddingHorizontal: 4 }]}>
+                  <View style={[styles.tableRow, { backgroundColor: colors.neutral.surfaceSubdued, paddingVertical: 8, paddingHorizontal: 4, borderRadius: radii.xs }]}>
                     <Text style={[styles.tableLabel, { fontWeight: '800', color: colors.neutral.textPrimary }]}>
                       Final Taxable Income
                     </Text>
@@ -626,8 +640,16 @@ export default function TaxScreen() {
                   </View>
                 </View>
 
-                {/* Net VAT Position Hero */}
-                <View style={[styles.liabilityDarkCard, { backgroundColor: vatNet >= 0 ? colors.brand.darkHero : '#064E3B' }]}>
+                {/* Net VAT Position Hero (keeps dark surface for executive contrast in both themes) */}
+                <View
+                  style={[
+                    styles.liabilityDarkCard,
+                    {
+                      backgroundColor: vatNet >= 0 ? colors.brand.darkHero : '#064E3B',
+                      borderColor: vatNet >= 0 ? colors.brand.darkHeroBorder : 'rgba(52, 211, 153, 0.28)',
+                    },
+                  ]}
+                >
                   <View style={styles.liabilityTopRow}>
                     <View>
                       <Text style={styles.liabilityTitle}>Net VAT Position (Box 12)</Text>
@@ -679,7 +701,18 @@ export default function TaxScreen() {
                   </View>
 
                   {vatAssessment?.boxes && vatAssessment.boxes.map((box: any, idx: number) => (
-                    <View key={idx} style={styles.vatBoxRow}>
+                    <TouchableOpacity
+                      key={idx}
+                      style={styles.vatBoxRow}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
+                        Alert.alert(
+                          `EmaraTax Box ${box.boxNumber}`,
+                          `${box.boxTitle}\n\n• Taxable Net Base: AED ${Number(box.amountAED || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}\n• VAT Total: AED ${Number(box.vatAmountAED || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}\n• Statutory Basis: ${box.legalReference}\n\nEnter these exact figures into Box ${box.boxNumber} when submitting your return on the FTA EmaraTax portal.`
+                        );
+                      }}
+                    >
                       <View style={styles.boxNumberCol}>
                         <Text style={styles.boxNumberText}>{box.boxNumber}</Text>
                       </View>
@@ -692,8 +725,9 @@ export default function TaxScreen() {
                         {box.amountAED > 0 && box.vatAmountAED > 0 && (
                           <Text style={styles.boxBaseVal}>Base: AED {Number(box.amountAED).toFixed(0)}</Text>
                         )}
+                        <Text style={{ fontSize: 9, color: colors.brand.primary, marginTop: 2, fontWeight: '700' }}>Tap for EmaraTax</Text>
                       </View>
-                    </View>
+                    </TouchableOpacity>
                   ))}
                 </View>
               </View>
@@ -766,184 +800,145 @@ export default function TaxScreen() {
         <View style={{ height: 40 }} />
       </ScrollView>
 
-      {/* AI Legal Explanation Modal */}
-      <Modal visible={aiModalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons name="sparkles" size={20} color={colors.brand.primary} />
-                <Text style={styles.modalTitle}>Grounded Tax Intelligence</Text>
+      {/* AI Legal Explanation Modal - Locked behind Coming Soon */}
+      <SmoothModal
+        visible={aiModalVisible}
+        onClose={() => setAiModalVisible(false)}
+        maxWidth={460}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Ionicons name="sparkles" size={20} color={colors.brand.primary} />
+              <Text style={styles.modalTitle}>Grounded Tax AI</Text>
+              <View style={{ backgroundColor: colors.brand.primaryMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.xs, borderWidth: 1, borderColor: colors.brand.primaryLight }}>
+                <Text style={{ fontSize: 9, fontWeight: '800', color: colors.brand.primary }}>COMING SOON</Text>
               </View>
-              <TouchableOpacity onPress={() => setAiModalVisible(false)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
             </View>
-
-            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
-              <Text style={styles.modalSubtitle}>
-                Ask legal questions grounded in your actual {activeTab} assessment:
-              </Text>
-
-              {/* Quick suggestion chips */}
-              <View style={styles.chipsRow}>
-                {[
-                  'Why is my tax liability this amount?',
-                  'Why was entertainment VAT blocked?',
-                  'Am I eligible for Small Business Relief?',
-                ].map((chip, idx) => (
-                  <TouchableOpacity
-                    key={idx}
-                    style={styles.promptChip}
-                    onPress={() => {
-                      setAiQuestion(chip);
-                      handleAskAi(chip);
-                    }}
-                  >
-                    <Text style={styles.promptChipText}>{chip}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <TextInput
-                style={styles.questionInput}
-                placeholder="Ask about this calculation or legal citation..."
-                value={aiQuestion}
-                onChangeText={setAiQuestion}
-                multiline
-              />
-
-              {aiLoading && (
-                <View style={{ padding: 20, alignItems: 'center' }}>
-                  <ActivityIndicator size="small" color={colors.brand.primary} />
-                  <Text style={{ marginTop: 8, fontSize: 13, color: colors.neutral.textSecondary }}>
-                    Consulting UAE tax legislation & assessment data...
-                  </Text>
-                </View>
-              )}
-
-              {aiResponse && !aiLoading && (
-                <View style={styles.aiResultBox}>
-                  <Text style={styles.aiAnswerTitle}>Statutory Explanation</Text>
-                  <Text style={styles.aiAnswerText}>{aiResponse.explanation}</Text>
-
-                  {aiResponse.citations && aiResponse.citations.length > 0 && (
-                    <View style={styles.citationsBox}>
-                      <Text style={styles.citationHeader}>Authoritative Citations</Text>
-                      {aiResponse.citations.map((c: any, i: number) => (
-                        <Text key={i} style={styles.citationText}>
-                          • {c.legislation || c.title} ({c.article || c.officialNumber})
-                        </Text>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              )}
-            </ScrollView>
-
-            <TouchableOpacity
-              style={styles.modalAskBtn}
-              onPress={() => handleAskAi()}
-              disabled={aiLoading || !aiQuestion.trim()}
-            >
-              <Text style={styles.modalAskBtnText}>
-                {aiLoading ? 'Consulting...' : 'Ask Grounded AI'}
-              </Text>
+            <TouchableOpacity onPress={() => setAiModalVisible(false)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
             </TouchableOpacity>
           </View>
+
+          <View style={{ backgroundColor: colors.neutral.canvas, borderRadius: radii.md, padding: 14, marginVertical: 12, borderWidth: 1, borderColor: colors.neutral.border }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <Ionicons name="shield-checkmark" size={18} color={colors.brand.primary} />
+              <Text style={{ fontSize: 13, fontWeight: '800', color: colors.neutral.textPrimary }}>
+                FTA Regulatory Review in Progress
+              </Text>
+            </View>
+            <Text style={{ fontSize: 12, color: colors.neutral.textSecondary, lineHeight: 18 }}>
+              Our statutory AI advisor grounded in UAE Federal Decree-Laws, Cabinet Decisions, and EmaraTax rules is currently in private regulatory preview.
+            </Text>
+            <Text style={{ fontSize: 12, color: colors.neutral.textSecondary, marginTop: 8, lineHeight: 18 }}>
+              All tax figures, Small Business Relief 0% thresholds, and VAT 201 schedules are computed 100% deterministically per statutory rules.
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.modalAskBtn}
+            onPress={() => setAiModalVisible(false)}
+          >
+            <Text style={styles.modalAskBtnText}>
+              Got It, View Manual Return
+            </Text>
+          </TouchableOpacity>
         </View>
-      </Modal>
+      </SmoothModal>
 
       {/* Tax Period & Financial Year Selector Modal */}
-      <Modal visible={periodModalVisible} animationType="fade" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Assessment Period</Text>
-              <TouchableOpacity onPress={() => setPeriodModalVisible(false)}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.modalSubtitle}>Corporate Tax Financial Year:</Text>
-            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
-              {[2026, 2025].map((fy) => {
-                const isSel = selectedFY === fy;
-                return (
-                  <TouchableOpacity
-                    key={fy}
-                    style={[
-                      styles.segmentPill,
-                      { flex: 1, alignItems: 'center' },
-                      isSel && styles.segmentPillActive,
-                    ]}
-                    onPress={() => {
-                      Haptics.selectionAsync().catch(() => {});
-                      setSelectedFY(fy);
-                    }}
-                  >
-                    <Text style={[styles.segmentPillText, isSel && styles.segmentPillTextActive]}>
-                      FY {fy}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            <Text style={styles.modalSubtitle}>VAT Return Period (Form 201):</Text>
-            <View style={{ gap: 8, marginBottom: 16 }}>
-              {Object.entries(vatPeriodDates).map(([key, info]) => {
-                const isSel = selectedVatPeriod === key;
-                return (
-                  <TouchableOpacity
-                    key={key}
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      paddingVertical: 12,
-                      paddingHorizontal: 14,
-                      borderRadius: radii.md,
-                      backgroundColor: isSel ? '#FFF8F4' : colors.neutral.canvas,
-                      borderWidth: 1,
-                      borderColor: isSel ? colors.brand.primary : colors.neutral.border,
-                    }}
-                    onPress={() => {
-                      Haptics.selectionAsync().catch(() => {});
-                      setSelectedVatPeriod(key);
-                    }}
-                  >
-                    <Text
-                      style={{
-                        fontSize: 13,
-                        fontWeight: isSel ? '800' : '600',
-                        color: isSel ? colors.brand.primary : colors.neutral.textPrimary,
-                      }}
-                    >
-                      {key} — {info.label}
-                    </Text>
-                    {isSel && (
-                      <Ionicons name="checkmark-circle" size={18} color={colors.brand.primary} />
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            <TouchableOpacity
-              style={styles.modalAskBtn}
-              onPress={() => setPeriodModalVisible(false)}
-            >
-              <Text style={styles.modalAskBtnText}>Apply & Run Tax Engines</Text>
+      <SmoothModal
+        visible={periodModalVisible}
+        onClose={() => setPeriodModalVisible(false)}
+        maxWidth={440}
+      >
+        <View style={{ padding: spacing.lg }}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Select Assessment Period</Text>
+            <TouchableOpacity onPress={() => setPeriodModalVisible(false)}>
+              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
             </TouchableOpacity>
           </View>
+
+          <Text style={styles.modalSubtitle}>Corporate Tax Financial Year:</Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+            {[2026, 2025].map((fy) => {
+              const isSel = selectedFY === fy;
+              return (
+                <TouchableOpacity
+                  key={fy}
+                  style={[
+                    styles.segmentPill,
+                    { flex: 1, alignItems: 'center' },
+                    isSel && styles.segmentPillActive,
+                  ]}
+                  onPress={() => {
+                    AppPreferences.selection();
+                    setSelectedFY(fy);
+                  }}
+                >
+                  <Text style={[styles.segmentPillText, isSel && styles.segmentPillTextActive]}>
+                    FY {fy}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text style={styles.modalSubtitle}>VAT Return Period (Form 201):</Text>
+          <View style={{ gap: 8, marginBottom: 16 }}>
+            {Object.entries(vatPeriodDates).map(([key, info]) => {
+              const isSel = selectedVatPeriod === key;
+              return (
+                <TouchableOpacity
+                  key={key}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    borderRadius: radii.md,
+                    backgroundColor: isSel ? colors.brand.blushSoft : colors.neutral.canvas,
+                    borderWidth: 1,
+                    borderColor: isSel ? colors.brand.primary : colors.neutral.border,
+                  }}
+                  onPress={() => {
+                    AppPreferences.selection();
+                    setSelectedVatPeriod(key);
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontWeight: isSel ? '800' : '600',
+                      color: isSel ? colors.brand.primary : colors.neutral.textPrimary,
+                    }}
+                  >
+                    {key} — {info.label}
+                  </Text>
+                  {isSel && (
+                    <Ionicons name="checkmark-circle" size={18} color={colors.brand.primary} />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <TouchableOpacity
+            style={styles.modalAskBtn}
+            onPress={() => setPeriodModalVisible(false)}
+          >
+            <Text style={styles.modalAskBtnText}>Apply & Run Tax Engines</Text>
+          </TouchableOpacity>
         </View>
-      </Modal>
+      </SmoothModal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+// Dynamic theme-aware stylesheet factory for TaxScreen
+const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.neutral.canvas,
@@ -977,11 +972,12 @@ const styles = StyleSheet.create({
     borderColor: colors.neutral.border,
   },
   headerTitle: {
+    ...fontStyles.displayBold,
     fontSize: 18,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   headerSubtitle: {
+    ...fontStyles.bodyRegular,
     fontSize: 12,
     color: colors.neutral.textSecondary,
   },
@@ -1006,12 +1002,13 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   bannerTitle: {
+    ...fontStyles.displayBold,
     fontSize: 26,
-    fontWeight: '900',
     color: colors.neutral.textPrimary,
     marginBottom: 4,
   },
   bannerSubtitle: {
+    ...fontStyles.bodyRegular,
     fontSize: 13,
     color: colors.neutral.textSecondary,
     lineHeight: 18,
@@ -1040,7 +1037,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textSecondary,
   },
   segmentPillTextActive: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
   },
   tabBody: {
     gap: 12,
@@ -1060,6 +1057,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand.darkHero,
     borderRadius: radii.xl,
     padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.brand.darkHeroBorder,
     ...shadows.cardHover,
   },
   positionHeaderRow: {
@@ -1077,12 +1076,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 3,
     borderRadius: radii.pill,
-    backgroundColor: '#ECFDF5',
+    backgroundColor: colors.semantic.successBg,
   },
   compliantTagText: {
     fontSize: 11,
     fontWeight: '700',
-    color: colors.semantic.successDark,
+    color: colors.semantic.successText,
   },
   positionAmount: {
     fontSize: 32,
@@ -1144,7 +1143,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 8,
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1179,7 +1178,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#ECFDF5',
+    backgroundColor: colors.semantic.successBg,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1198,7 +1197,7 @@ const styles = StyleSheet.create({
     color: colors.neutral.textPrimary,
   },
   sbrGreenPill: {
-    backgroundColor: '#ECFDF5',
+    backgroundColor: colors.semantic.successBg,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: radii.pill,
@@ -1206,7 +1205,7 @@ const styles = StyleSheet.create({
   sbrGreenText: {
     fontSize: 11,
     fontWeight: '700',
-    color: colors.semantic.successDark,
+    color: colors.semantic.successText,
   },
   sbrCardDesc: {
     fontSize: 12,
@@ -1236,7 +1235,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     alignItems: 'flex-start',
-    backgroundColor: '#FAF9F7',
+    backgroundColor: colors.neutral.surfaceInset,
     padding: 8,
     borderRadius: 6,
   },
@@ -1272,8 +1271,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   ctHeaderTitle: {
+    ...fontStyles.displayBold,
     fontSize: 16,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   ctHeaderSub: {
@@ -1293,7 +1292,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: radii.pill,
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
   },
   reassessText: {
     fontSize: 12,
@@ -1304,6 +1303,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand.darkHero,
     borderRadius: radii.xl,
     padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.brand.darkHeroBorder,
     ...shadows.cardHover,
   },
   liabilityTopRow: {
@@ -1416,7 +1417,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 6,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    borderBottomColor: colors.neutral.border,
   },
   adjLabel: {
     fontSize: 12,
@@ -1436,13 +1437,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    borderBottomColor: colors.neutral.border,
   },
   boxNumberCol: {
     width: 52,
     paddingVertical: 2,
     borderRadius: 4,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: colors.neutral.surfaceInset,
     alignItems: 'center',
   },
   boxNumberText: {
@@ -1470,7 +1471,7 @@ const styles = StyleSheet.create({
   },
   sbrProgressContainer: {
     height: 8,
-    backgroundColor: '#E2E8F0',
+    backgroundColor: colors.neutral.surfaceInset,
     borderRadius: 4,
     overflow: 'hidden',
     marginVertical: 10,
@@ -1507,11 +1508,11 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: colors.neutral.scrim,
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.neutral.surfaceRaised,
     borderTopLeftRadius: radii.xl,
     borderTopRightRadius: radii.xl,
     padding: spacing.lg,
@@ -1523,11 +1524,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   modalTitle: {
+    ...fontStyles.displayBold,
     fontSize: 16,
-    fontWeight: '800',
     color: colors.neutral.textPrimary,
   },
   modalSubtitle: {
+    ...fontStyles.bodyRegular,
     fontSize: 12,
     color: colors.neutral.textSecondary,
     marginBottom: 10,
@@ -1539,7 +1541,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   promptChip: {
-    backgroundColor: '#FFF3ED',
+    backgroundColor: colors.brand.primaryMuted,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: radii.pill,
@@ -1550,49 +1552,50 @@ const styles = StyleSheet.create({
     color: colors.brand.primary,
   },
   questionInput: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: colors.neutral.surfaceSubdued,
     borderRadius: radii.md,
     padding: 12,
     borderWidth: 1,
     borderColor: colors.neutral.border,
+    color: colors.neutral.textPrimary,
     minHeight: 64,
     fontSize: 13,
     marginBottom: 12,
   },
   aiResultBox: {
-    backgroundColor: '#F0FDF4',
+    backgroundColor: colors.semantic.successBg,
     padding: 12,
     borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#BBF7D0',
+    borderColor: colors.semantic.successBorder,
     marginBottom: 12,
   },
   aiAnswerTitle: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#166534',
+    color: colors.semantic.successText,
     marginBottom: 4,
   },
   aiAnswerText: {
     fontSize: 12,
-    color: '#14532D',
+    color: colors.semantic.successText,
     lineHeight: 18,
   },
   citationsBox: {
     marginTop: 8,
     borderTopWidth: 1,
-    borderTopColor: '#BBF7D0',
+    borderTopColor: colors.semantic.successBorder,
     paddingTop: 6,
   },
   citationHeader: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#166534',
+    color: colors.semantic.successText,
     marginBottom: 2,
   },
   citationText: {
     fontSize: 10,
-    color: '#15803D',
+    color: colors.semantic.successDark,
   },
   modalAskBtn: {
     backgroundColor: colors.brand.primary,
@@ -1602,7 +1605,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   modalAskBtnText: {
-    color: '#FFFFFF',
+    color: colors.neutral.onPrimary,
     fontWeight: '700',
     fontSize: 14,
   },
