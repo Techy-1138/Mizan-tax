@@ -1,1083 +1,676 @@
 // ============================================================================
-// Mizan (ميزان) - Invoices Hub Tab
-// Design Ref: screen-designs/4130.png (Screen 1) & screen-designs/4126.png (Screen 1)
-// Clean card filters, invoice listing, status chips, detail modal & actions
-// Connected to Active Business Entity & Real Persisted Backend Records
+// Mizan (ميزان) - Tax Invoices Screen (Screen 6)
+// Monochrome UAE Tax Invoice ledger: Summary Card, Status Filters, Lifecycle
+// Actions (Issue, Mark Paid, PDF Export), and + New Invoice ModalSheet with
+// both Manual Entry and Scan Existing Invoice (OCR prefill).
 // ============================================================================
 
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  ActivityIndicator,
-  RefreshControl,
-  Modal,
-  Alert,
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import { SafeAreaView } from '../../src/components/SafeAreaView';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import * as Haptics from 'expo-haptics';
-import { AppPreferences } from '../../src/utils/preferences';
-import { ThemeColors, ThemeShadows, radii, spacing, fontStyles } from '../../src/theme/tokens';
-import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
-import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
+import { useTheme } from '../../src/context/ThemeContext';
+import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
-import { AnimatedPressable } from '../../src/animations';
-import { InvoicesSkeleton } from '../../src/components/Skeleton';
-import { SmoothModal } from '../../src/components/SmoothModal';
+import { VisionOcr } from '../../src/services/visionOcr';
+import { borders, radii, spacing } from '../../src/theme/tokens';
+import { AppText, Badge, Button, Card, ModalSheet, TextField } from '../../src/ui';
 
-type InvoiceFilter = 'All' | 'Paid' | 'Overdue' | 'Drafts';
+type InvoiceFilter = 'ALL' | 'DRAFT' | 'ISSUED' | 'PAID';
+type CreateMode = 'manual' | 'scan';
 
-interface InvoiceListItem {
-  id: string;
-  invoiceNumber: string;
-  customerName: string;
-  customerTrn?: string;
-  issueDate: string;
-  dueDate: string;
-  currency: string;
-  subtotalNet: number;
-  vatTotal: number;
-  grandTotal: number;
-  amountPaid: number;
-  outstandingBalance: number;
-  status: 'DRAFT' | 'ISSUED' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' | 'VOID';
-  lines?: any[];
+function formatAED(val: number | string | undefined): string {
+  const num = Number(val || 0);
+  if (Number.isNaN(num)) return 'AED 0.00';
+  return `AED ${num.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
-export default function InvoicesTab() {
-  const router = useRouter();
+/**
+ * Monochrome UAE Tax Invoices workspace.
+ */
+export default function InvoicesScreen() {
+  const { colors } = useTheme();
   const { isRTL } = useLocale();
   const { activeBusiness } = useBusiness();
-  // Resolve theme palette & dynamic styles for Light/Dark reactivity
-  const { colors, isDark } = useTheme();
-  const styles = useThemedStyles(createStyles);
 
-  const [activeFilter, setActiveFilter] = useState<InvoiceFilter>('All');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [invoices, setInvoices] = useState<InvoiceListItem[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [invoices, setInvoices] = useState<any[]>([]);
+  const [filter, setFilter] = useState<InvoiceFilter>('ALL');
   const [refreshing, setRefreshing] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
 
-  // Selected Invoice Detail Modal State
-  const [selectedInvoice, setSelectedInvoice] = useState<InvoiceListItem | null>(null);
-  const [isActionBusy, setIsActionBusy] = useState(false);
+  // + New Invoice ModalSheet state
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createMode, setCreateMode] = useState<CreateMode>('manual');
+  const [customerName, setCustomerName] = useState('');
+  const [customerTrn, setCustomerTrn] = useState('');
+  const [description, setDescription] = useState('Consulting Services');
+  const [unitPrice, setUnitPrice] = useState('');
+  const [quantity, setQuantity] = useState('1');
+  const [vatTreatment, setVatTreatment] = useState<'STANDARD_5' | 'ZERO_RATED_0'>('STANDARD_5');
+  const [issueDate, setIssueDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const fetchInvoices = useCallback(async () => {
+  const loadInvoices = useCallback(async () => {
     if (!activeBusiness?.id) return;
-    setIsLoading(true);
+    setRefreshing(true);
     try {
-      const statusParam =
-        activeFilter === 'Paid'
-          ? 'PAID'
-          : activeFilter === 'Overdue'
-          ? 'OVERDUE'
-          : activeFilter === 'Drafts'
-          ? 'DRAFT'
-          : undefined;
-
-      const raw = await MizanApi.getInvoices(activeBusiness.id, statusParam, searchQuery);
-      const mapped: InvoiceListItem[] = (raw || []).map((inv: any) => ({
-        id: inv.id,
-        invoiceNumber: inv.invoiceNumber,
-        customerName: inv.customer?.name || inv.customer?.companyName || 'Valued Customer',
-        customerTrn: inv.customer?.trn || '',
-        issueDate: inv.issueDate,
-        dueDate: inv.dueDate,
-        currency: inv.currency || 'AED',
-        subtotalNet: inv.calculation?.subtotalAfterDiscount ?? inv.subtotalAmount ?? 0,
-        vatTotal: inv.calculation?.totalVat ?? inv.vatAmount ?? 0,
-        grandTotal: inv.calculation?.grandTotal ?? inv.totalAmount ?? 0,
-        amountPaid: inv.amountPaid || 0,
-        outstandingBalance:
-          inv.outstandingBalance ?? (inv.calculation?.grandTotal ?? inv.totalAmount ?? 0) - (inv.amountPaid || 0),
-        status: inv.status,
-        lines: inv.lines || [],
-      }));
-      setInvoices(mapped);
-    } catch (err) {
-      console.warn('Failed to load invoices:', err);
+      const list = await MizanApi.getInvoices(activeBusiness.id);
+      setInvoices(Array.isArray(list) ? list : []);
+    } catch {
+      setInvoices([]);
     } finally {
-      setIsLoading(false);
       setRefreshing(false);
     }
-  }, [activeBusiness?.id, activeFilter, searchQuery]);
+  }, [activeBusiness?.id]);
 
   useEffect(() => {
-    fetchInvoices();
-  }, [fetchInvoices]);
+    loadInvoices();
+  }, [loadInvoices]);
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchInvoices();
-  };
+  const { totalBilled, totalOutputVat } = useMemo(() => {
+    return invoices.reduce(
+      (acc, inv) => {
+        if ((inv.status || '').toUpperCase() === 'VOID') return acc;
+        acc.totalBilled += Number(inv.totalAmountAED ?? inv.totalAmount ?? 0);
+        acc.totalOutputVat += Number(inv.vatAmountAED ?? inv.taxAmount ?? 0);
+        return acc;
+      },
+      { totalBilled: 0, totalOutputVat: 0 }
+    );
+  }, [invoices]);
 
-  const handleOpenInvoice = (inv: InvoiceListItem) => {
-    AppPreferences.selection();
-    setSelectedInvoice(inv);
-  };
+  const filteredInvoices = useMemo(() => {
+    if (filter === 'ALL') return invoices;
+    return invoices.filter((inv) => (inv.status || 'DRAFT').toUpperCase() === filter);
+  }, [invoices, filter]);
 
-  const handleIssueDraftInvoice = async () => {
-    if (!selectedInvoice) return;
-    setIsActionBusy(true);
-    try {
-      const issued = await MizanApi.issueInvoice(selectedInvoice.id);
-      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
-      Alert.alert(
-        'Invoice Issued',
-        `Invoice ${issued.invoiceNumber || selectedInvoice.invoiceNumber} has been officially issued under Article 59.`
+  /** Scans an existing invoice photo via OCR and prefills Manual fields */
+  const handleScanExistingInvoice = async () => {
+    setFeedback(null);
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      setFeedback(
+        isRTL
+          ? 'تم رفض إذن الكاميرا. استخدم الإدخال اليدوي.'
+          : 'Camera permission denied. Please use Manual entry.'
       );
-      setSelectedInvoice(null);
-      await fetchInvoices();
+      return;
+    }
+
+    const pic = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      quality: 0.85,
+      base64: true,
+    });
+    if (pic.canceled || !pic.assets?.[0]?.base64) return;
+
+    setScanLoading(true);
+    try {
+      const asset = pic.assets[0];
+      const extracted = await VisionOcr.extractReceipt(
+        asset.base64!,
+        asset.mimeType || 'image/jpeg'
+      );
+      if (extracted.merchantName) setCustomerName(extracted.merchantName);
+      if (extracted.trn) setCustomerTrn(extracted.trn.replace(/\D/g, '').slice(0, 15));
+      if (extracted.invoiceDate) setIssueDate(extracted.invoiceDate);
+      if (extracted.amountAED) setUnitPrice(extracted.amountAED);
+      setCreateMode('manual');
     } catch (err: any) {
-      Alert.alert('Issuance Failed', err?.message || 'Could not issue draft invoice.');
+      setFeedback(
+        err?.message || (isRTL ? 'تعذر مسح الفاتورة.' : 'Could not scan invoice.')
+      );
     } finally {
-      setIsActionBusy(false);
+      setScanLoading(false);
     }
   };
 
-  const handleMarkInvoicePaid = async () => {
-    if (!selectedInvoice) return;
-    setIsActionBusy(true);
-    try {
-      const payAmount =
-        selectedInvoice.outstandingBalance > 0
-          ? selectedInvoice.outstandingBalance
-          : selectedInvoice.grandTotal;
-      await MizanApi.recordInvoicePayment(selectedInvoice.id, payAmount);
-      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
-      Alert.alert(
-        'Payment Recorded',
-        `${selectedInvoice.currency} ${payAmount.toLocaleString(undefined, {
-          minimumFractionDigits: 2,
-        })} recorded against ${selectedInvoice.invoiceNumber}.`
+  /** Creates customer (if needed) and saves a new draft invoice */
+  const handleCreateInvoice = async () => {
+    if (!activeBusiness?.id) return;
+    setFeedback(null);
+
+    const trimmedCustomer = customerName.trim();
+    const cleanTrn = customerTrn.replace(/\s+/g, '');
+    const price = Number(unitPrice.replace(/[^0-9.]/g, '') || 0);
+    const qty = Number(quantity.replace(/[^0-9.]/g, '') || 1);
+
+    if (!trimmedCustomer || price <= 0 || qty <= 0) {
+      setFeedback(
+        isRTL
+          ? 'يرجى إدخال اسم العميل والسعر والكمية.'
+          : 'Customer name, price, and quantity are required.'
       );
-      setSelectedInvoice(null);
-      await fetchInvoices();
+      return;
+    }
+    if (cleanTrn.length > 0 && !/^\d{15}$/.test(cleanTrn)) {
+      setFeedback(
+        isRTL
+          ? 'الرقم الضريبي للعميل يجب أن يتكون من 15 رقماً.'
+          : 'Customer TRN must be exactly 15 digits.'
+      );
+      return;
+    }
+
+    setSaving(true);
+    try {
+      // Reuse existing customer by name or create a new CORPORATE customer
+      const existingCustomers = await MizanApi.getCustomers(activeBusiness.id).catch(() => []);
+      const match = existingCustomers.find(
+        (c: any) => (c.name || '').toLowerCase() === trimmedCustomer.toLowerCase()
+      );
+
+      const customer =
+        match ||
+        (await MizanApi.createCustomer(activeBusiness.id, {
+          name: trimmedCustomer,
+          customerType: 'CORPORATE',
+          billingAddress: 'Dubai, United Arab Emirates',
+          ...(cleanTrn ? { trn: cleanTrn } : {}),
+        }));
+
+      // Default dueDate = issueDate + 14 days
+      const due = new Date(issueDate || Date.now());
+      due.setDate(due.getDate() + 14);
+      const dueDateStr = due.toISOString().split('T')[0];
+
+      await MizanApi.createDraftInvoice({
+        businessId: activeBusiness.id,
+        customerId: customer.id,
+        issueDate,
+        dueDate: dueDateStr,
+        currency: 'AED',
+        lines: [
+          {
+            description: description.trim() || 'Services',
+            quantity: qty,
+            unitPrice: price,
+            vatTreatment,
+          },
+        ],
+      });
+
+      setCreateOpen(false);
+      setCustomerName('');
+      setCustomerTrn('');
+      setUnitPrice('');
+      await loadInvoices();
     } catch (err: any) {
-      Alert.alert('Payment Error', err?.message || 'Could not record invoice payment.');
+      setFeedback(
+        err?.message || (isRTL ? 'تعذر إنشاء الفاتورة.' : 'Failed to create invoice.')
+      );
     } finally {
-      setIsActionBusy(false);
+      setSaving(false);
     }
   };
 
-  const handleShareInvoicePdf = async () => {
-    if (!selectedInvoice) return;
-    setIsActionBusy(true);
+  /** Issues a draft invoice (locks sequential number) */
+  const handleIssue = async (id: string) => {
+    setBusyId(id);
     try {
-      let html = '';
-      try {
-        const res = await MizanApi.getInvoicePdfHtml(selectedInvoice.id);
-        html = res.html;
-      } catch {
-        // Fallback statutory Article 59 template
-        html = `
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="utf-8" />
-            <title>Tax Invoice ${selectedInvoice.invoiceNumber}</title>
-            <style>
-              body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 36px; color: #141416; }
-              .header { display: flex; justify-content: space-between; border-bottom: 2px solid #F95700; padding-bottom: 18px; margin-bottom: 24px; }
-              .brand { font-size: 24px; font-weight: 800; color: #F95700; }
-              .box { background: #F7F6F4; padding: 14px; border-radius: 8px; margin-bottom: 20px; }
-              table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-              th, td { padding: 10px; border-bottom: 1px solid #EAE6E1; text-align: left; }
-              th { background: #F7F6F4; font-size: 12px; }
-              .totals { margin-top: 24px; text-align: right; }
-            </style>
-          </head>
-          <body>
-            <div class="header">
-              <div>
-                <div class="brand">${activeBusiness?.legalName || 'Mizan Business'}</div>
-                <p>TRN: ${activeBusiness?.vatTrn || 'N/A'} | License: ${activeBusiness?.tradeLicenseNumber || 'N/A'}</p>
-              </div>
-              <div style="text-align: right;">
-                <h2>TAX INVOICE</h2>
-                <p><strong>#${selectedInvoice.invoiceNumber}</strong></p>
-                <p>Date: ${selectedInvoice.issueDate}</p>
-              </div>
-            </div>
-            <div class="box">
-              <strong>Bill To:</strong> ${selectedInvoice.customerName}<br/>
-              ${selectedInvoice.customerTrn ? `Customer TRN: ${selectedInvoice.customerTrn}` : ''}
-            </div>
-            <div class="totals">
-              <p>Net Amount: ${selectedInvoice.currency} ${selectedInvoice.subtotalNet.toFixed(2)}</p>
-              <p>VAT (5%): ${selectedInvoice.currency} ${selectedInvoice.vatTotal.toFixed(2)}</p>
-              <h3>Grand Total: ${selectedInvoice.currency} ${selectedInvoice.grandTotal.toFixed(2)}</h3>
-              <p>Status: <strong>${selectedInvoice.status}</strong></p>
-            </div>
-          </body>
-          </html>
-        `;
+      await MizanApi.issueInvoice(id);
+      await loadInvoices();
+    } catch (err: any) {
+      setFeedback(err?.message || 'Failed to issue invoice.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  /** Records full payment against an issued invoice */
+  const handleMarkPaid = async (inv: any) => {
+    setBusyId(inv.id);
+    try {
+      const amount = Number(inv.totalAmountAED ?? inv.totalAmount ?? 0);
+      await MizanApi.recordInvoicePayment(inv.id, amount);
+      await loadInvoices();
+    } catch (err: any) {
+      setFeedback(err?.message || 'Failed to record payment.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  /** Exports bilingual invoice PDF */
+  const handleExportPdf = async (id: string) => {
+    setBusyId(id);
+    try {
+      const { html } = await MizanApi.getInvoicePdfHtml(id);
+      if (await Sharing.isAvailableAsync()) {
+        const { uri } = await Print.printToFileAsync({ html });
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf' });
+      } else {
+        await Print.printAsync({ html });
       }
-      const { uri } = await Print.printToFileAsync({ html });
-      await Sharing.shareAsync(uri);
     } catch (err: any) {
-      Alert.alert('PDF Export Error', err?.message || 'Unable to generate PDF invoice.');
+      setFeedback(err?.message || 'Could not export invoice PDF.');
     } finally {
-      setIsActionBusy(false);
+      setBusyId(null);
     }
   };
-
-  const filteredInvoices = invoices.filter((inv) => {
-    const matchesFilter =
-      activeFilter === 'All'
-        ? true
-        : activeFilter === 'Paid'
-        ? inv.status === 'PAID'
-        : activeFilter === 'Overdue'
-        ? inv.status === 'OVERDUE'
-        : inv.status === 'DRAFT';
-
-    const matchesSearch =
-      inv.invoiceNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      inv.customerName.toLowerCase().includes(searchQuery.toLowerCase());
-
-    return matchesFilter && matchesSearch;
-  });
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
-      {/* Top Header */}
-      <View style={styles.headerRow}>
-        <View style={styles.brandRow}>
-          <View style={styles.logoBadge}>
-            <Ionicons name="documents" size={20} color={colors.neutral.onPrimary} />
-          </View>
-          <View>
-            <Text style={styles.brandTitle}>Mizan ميزان</Text>
-            {activeBusiness && (
-              <Text style={styles.businessBadgeText} numberOfLines={1}>
-                {activeBusiness.tradeName || activeBusiness.legalName}
-              </Text>
-            )}
-          </View>
-        </View>
-
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={styles.headerIconButton}
-            activeOpacity={0.7}
-            onPress={() => router.push('/scan/readiness')}
-          >
-            <Ionicons name="notifications-outline" size={20} color={colors.neutral.textPrimary} />
-            <View style={styles.notifDot} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.avatarButton}
-            activeOpacity={0.7}
-            onPress={() => router.push('/(tabs)/profile')}
-          >
-            <Text style={styles.avatarText}>
-              {(activeBusiness?.tradeName || activeBusiness?.legalName || 'ME').slice(0, 2).toUpperCase()}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
+    <SafeAreaView
+      edges={['top']}
+      style={[styles.safe, { backgroundColor: colors.neutral.canvas }]}
+    >
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={loadInvoices}
+            tintColor={colors.neutral.textPrimary}
+          />
+        }
       >
-        {/* Title & Tagline */}
-        <View style={styles.pageHeader}>
-          <Text style={styles.pageTitle}>{isRTL ? 'الفواتير الضريبية' : 'Tax Invoices'}</Text>
-          <Text style={styles.pageSubtitle}>
-            {isRTL
-              ? 'إنشاء وإدارة ومتابعة فواتير ضريبة القيمة المضافة المتوافقة مع المادة 59.'
-              : 'Create, manage and issue VAT tax invoices compliant with Article 59.'}
-          </Text>
+        {/* Header */}
+        <View style={styles.headerRow}>
+          <View>
+            <AppText variant="h2">
+              {isRTL ? 'الفواتير الضريبية' : 'Tax Invoices'}
+            </AppText>
+            <AppText variant="caption" tone="secondary">
+              {isRTL
+                ? 'إيرادات المبيعات وضريبة المخرجات (5%)'
+                : 'Sales Revenue & Output VAT (5%)'}
+            </AppText>
+          </View>
+          <Button
+            label={isRTL ? '+ فاتورة' : '+ New Invoice'}
+            variant="primary"
+            size="md"
+            fullWidth={false}
+            onPress={() => {
+              setCreateMode('manual');
+              setCreateOpen(true);
+            }}
+          />
         </View>
 
-        {/* Primary CTA: + New Invoice */}
-        <AnimatedPressable
-          style={styles.createButton}
-          activeScale={0.97}
-          onPress={() =>
-            router.push({ pathname: '/invoices/new', params: { docType: 'TAX_INVOICE' } })
-          }
-        >
-          <Ionicons name="add" size={22} color={colors.neutral.onPrimary} style={{ marginRight: 6 }} />
-          <Text style={styles.createButtonText}>
-            {isRTL ? '+ فاتورة جديدة' : '+ New Tax Invoice'}
-          </Text>
-        </AnimatedPressable>
+        {/* Summary Card */}
+        <Card variant="inverted" style={styles.summaryCard}>
+          <View style={styles.summaryCol}>
+            <AppText variant="caption" tone="inverted" style={styles.summaryMuted}>
+              {isRTL ? 'إجمالي الفواتير' : 'Total Billed (YTD)'}
+            </AppText>
+            <AppText variant="h2" tone="inverted" tabular>
+              {formatAED(totalBilled)}
+            </AppText>
+          </View>
+          <View style={[styles.summaryCol, styles.summaryRight]}>
+            <AppText variant="caption" tone="inverted" style={styles.summaryMuted}>
+              {isRTL ? 'ضريبة المخرجات (5%)' : 'Output VAT (5%)'}
+            </AppText>
+            <AppText variant="h2" tone="inverted" tabular>
+              {formatAED(totalOutputVat)}
+            </AppText>
+          </View>
+        </Card>
 
-        {/* Action Shortcuts Grid */}
-        <View style={styles.actionGrid}>
-          <AnimatedPressable
-            style={styles.actionCard}
-            onPress={() =>
-              router.push({ pathname: '/invoices/new', params: { docType: 'TAX_INVOICE' } })
-            }
-            activeScale={0.97}
+        {/* Feedback Banner */}
+        {feedback ? (
+          <View
+            style={[
+              styles.feedbackBox,
+              {
+                backgroundColor: colors.neutral.surfaceSubtle,
+                borderColor: colors.neutral.borderStrong,
+              },
+            ]}
           >
-            <View style={[styles.actionIconBox, { backgroundColor: colors.brand.primaryMuted }]}>
-              <Ionicons name="receipt-outline" size={22} color={colors.brand.primary} />
-            </View>
-            <Text style={styles.actionCardLabel}>
-              {isRTL ? 'فاتورة ضريبية' : 'New Tax Invoice'}
-            </Text>
-          </AnimatedPressable>
+            <AppText variant="caption" weight="medium">
+              {feedback}
+            </AppText>
+          </View>
+        ) : null}
 
-          <AnimatedPressable
-            style={styles.actionCard}
-            onPress={() =>
-              router.push({ pathname: '/invoices/new', params: { docType: 'CREDIT_NOTE' } })
-            }
-            activeScale={0.97}
-          >
-            <View style={[styles.actionIconBox, { backgroundColor: colors.semantic.infoBg }]}>
-              <Ionicons name="document-text-outline" size={22} color={colors.semantic.info} />
-            </View>
-            <Text style={styles.actionCardLabel}>
-              {isRTL ? 'إشعار دائن' : 'New Credit Note'}
-            </Text>
-          </AnimatedPressable>
-
-          <AnimatedPressable
-            style={styles.actionCard}
-            onPress={() =>
-              router.push({ pathname: '/invoices/new', params: { docType: 'DEBIT_NOTE' } })
-            }
-            activeScale={0.97}
-          >
-            <View style={[styles.actionIconBox, { backgroundColor: colors.semantic.riskBg }]}>
-              <Ionicons name="reader-outline" size={22} color={colors.semantic.risk} />
-            </View>
-            <Text style={styles.actionCardLabel}>
-              {isRTL ? 'إشعار مدين' : 'New Debit Note'}
-            </Text>
-          </AnimatedPressable>
-
-          <AnimatedPressable
-            style={styles.actionCard}
-            onPress={() => router.push('/learn/chat')}
-            activeScale={0.97}
-          >
-            <View
-              style={[
-                styles.actionIconBox,
-                { backgroundColor: isDark ? 'rgba(139, 92, 246, 0.16)' : '#F5F3FF' },
-              ]}
-            >
-              <Ionicons name="sparkles-outline" size={22} color={isDark ? '#A78BFA' : '#7C3AED'} />
-            </View>
-            <Text style={styles.actionCardLabel}>
-              {isRTL ? 'استشارة الذكاء' : 'Tax AI Help'}
-            </Text>
-          </AnimatedPressable>
-        </View>
-
-        {/* Filter Pills */}
+        {/* Filter Chips */}
         <View style={styles.filterRow}>
-          {(['All', 'Paid', 'Overdue', 'Drafts'] as InvoiceFilter[]).map((filter) => {
-            const isSelected = activeFilter === filter;
+          {(
+            [
+              { key: 'ALL', label: isRTL ? 'الكل' : 'All' },
+              { key: 'DRAFT', label: isRTL ? 'مسودة' : 'Draft' },
+              { key: 'ISSUED', label: isRTL ? 'صادرة' : 'Issued' },
+              { key: 'PAID', label: isRTL ? 'مدفوعة' : 'Paid' },
+            ] as const
+          ).map((chip) => {
+            const active = filter === chip.key;
             return (
-              <TouchableOpacity
-                key={filter}
-                style={[styles.filterPill, isSelected && styles.filterPillActive]}
-                onPress={() => {
-                  AppPreferences.selection();
-                  setActiveFilter(filter);
-                }}
-                activeOpacity={0.7}
+              <Pressable
+                key={chip.key}
+                onPress={() => setFilter(chip.key)}
+                style={[
+                  styles.filterChip,
+                  {
+                    backgroundColor: active ? colors.brand.primary : colors.neutral.surface,
+                    borderColor: active ? colors.brand.primary : colors.neutral.border,
+                  },
+                ]}
               >
-                <Text
-                  style={[
-                    styles.filterPillText,
-                    isSelected && styles.filterPillTextActive,
-                  ]}
+                <AppText
+                  variant="caption"
+                  weight="semiBold"
+                  tone={active ? 'inverted' : 'primary'}
                 >
-                  {filter}
-                </Text>
-              </TouchableOpacity>
+                  {chip.label}
+                </AppText>
+              </Pressable>
             );
           })}
         </View>
 
-        {/* Search bar */}
-        <View style={styles.searchBox}>
-          <Ionicons name="search" size={18} color={colors.neutral.textTertiary} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder={isRTL ? 'ابحث برقم الفاتورة أو اسم العميل...' : 'Search by invoice # or customer...'}
-            placeholderTextColor={colors.neutral.textTertiary}
-            keyboardAppearance={isDark ? 'dark' : 'light'}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Ionicons name="close-circle" size={18} color={colors.neutral.textTertiary} />
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* Loading Indicator */}
-        {isLoading && !refreshing && <InvoicesSkeleton />}
-
-        {/* Empty State */}
-        {!isLoading && filteredInvoices.length === 0 && (
-          <View style={styles.emptyStateBox}>
-            <Ionicons name="receipt-outline" size={44} color={colors.neutral.textTertiary} />
-            <Text style={styles.emptyStateTitle}>
-              {searchQuery || activeFilter !== 'All'
-                ? isRTL
-                  ? 'لا توجد فواتير مطابقة'
-                  : 'No Invoices Found'
-                : isRTL
-                ? 'لا توجد فواتير حتى الآن'
-                : 'No Invoices Yet'}
-            </Text>
-            <Text style={styles.emptyStateDesc}>
-              {activeBusiness
-                ? isRTL
-                  ? `أنشئ أول فاتورة ضريبية متوافقة لشركة ${activeBusiness.tradeName || activeBusiness.legalName}.`
-                  : `Create a UAE VAT-compliant invoice for ${activeBusiness.tradeName || activeBusiness.legalName}.`
-                : isRTL
-                ? 'يرجى تسجيل رخصة شركتك أولاً.'
-                : 'Please onboard or select an active business entity.'}
-            </Text>
-            {activeBusiness && (
-              <TouchableOpacity
-                style={styles.emptyCtaBtn}
-                onPress={() =>
-                  router.push({ pathname: '/invoices/new', params: { docType: 'TAX_INVOICE' } })
-                }
-                activeOpacity={0.8}
-              >
-                <Ionicons name="add" size={16} color={colors.neutral.onPrimary} />
-                <Text style={styles.emptyCtaBtnText}>
-                  {isRTL ? 'إنشاء فاتورة جديدة' : 'Create New Invoice'}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-
-        {/* Invoices List */}
-        <View style={styles.listContainer}>
-          {filteredInvoices.map((inv) => {
-            const isPaid = inv.status === 'PAID';
-            const isDraft = inv.status === 'DRAFT';
-            const isOverdue = inv.status === 'OVERDUE';
-            const isPartPaid = inv.status === 'PARTIALLY_PAID';
+        {/* Invoice List */}
+        {filteredInvoices.length === 0 ? (
+          <Card style={styles.emptyCard}>
+            <AppText variant="body" weight="semiBold">
+              {isRTL ? 'لا توجد فواتير بعد' : 'No tax invoices yet'}
+            </AppText>
+            <AppText variant="bodySmall" tone="secondary">
+              {isRTL
+                ? 'اضغط على + فاتورة لإنشاء فاتورة يدوياً أو مسح فاتورة حالية.'
+                : 'Tap + New Invoice to create a UAE Tax Invoice manually or scan an existing one.'}
+            </AppText>
+          </Card>
+        ) : (
+          filteredInvoices.map((inv) => {
+            const status = (inv.status || 'DRAFT').toUpperCase();
+            const total = inv.totalAmountAED ?? inv.totalAmount ?? 0;
+            const vat = inv.vatAmountAED ?? inv.taxAmount ?? 0;
+            const number = inv.invoiceNumber || 'DRAFT';
+            const customer = inv.customer?.name || inv.customerName || 'Customer';
 
             return (
-              <TouchableOpacity
-                key={inv.id}
-                style={styles.invoiceRowCard}
-                activeOpacity={0.75}
-                onPress={() => handleOpenInvoice(inv)}
-              >
-                <View style={styles.invoiceIconCircle}>
-                  <Ionicons name="document-text-outline" size={20} color={colors.brand.primary} />
-                </View>
-
-                <View style={styles.invoiceInfoCol}>
-                  <Text style={styles.invoiceNoText}>{inv.invoiceNumber}</Text>
-                  <Text style={styles.customerText} numberOfLines={1}>
-                    {inv.customerName}
-                  </Text>
-                  <Text style={styles.dateText}>{inv.issueDate}</Text>
-                </View>
-
-                <View style={styles.invoiceAmountCol}>
-                  <Text style={styles.amountText}>
-                    {inv.currency} {inv.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </Text>
-                  <View
-                    style={[
-                      styles.statusBadge,
-                      isPaid
-                        ? styles.statusBadgePaid
-                        : isDraft
-                        ? styles.statusBadgeDraft
-                        : isOverdue
-                        ? styles.statusBadgeOverdue
-                        : isPartPaid
-                        ? styles.statusBadgePartPaid
-                        : styles.statusBadgeDue,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.statusBadgeText,
-                        isPaid
-                          ? styles.statusTextPaid
-                          : isDraft
-                          ? styles.statusTextDraft
-                          : isOverdue
-                          ? styles.statusTextOverdue
-                          : styles.statusTextDue,
-                      ]}
-                    >
-                      {inv.status}
-                    </Text>
+              <Card key={inv.id} style={styles.invCard}>
+                <View style={styles.invTop}>
+                  <View style={styles.invInfo}>
+                    <AppText variant="body" weight="semiBold" numberOfLines={1}>
+                      {customer}
+                    </AppText>
+                    <AppText variant="caption" tone="secondary" tabular>
+                      {number} · {(inv.issueDate || '').toString().slice(0, 10)}
+                    </AppText>
+                  </View>
+                  <View style={styles.invAmounts}>
+                    <AppText variant="body" weight="bold" tabular>
+                      {formatAED(total)}
+                    </AppText>
+                    <AppText variant="caption" tone="muted" tabular>
+                      VAT {Number(vat).toFixed(2)}
+                    </AppText>
                   </View>
                 </View>
-                <Ionicons name="chevron-forward" size={16} color={colors.neutral.textTertiary} />
-              </TouchableOpacity>
-            );
-          })}
-        </View>
 
-        <View style={{ height: 40 }} />
+                <View style={[styles.invFooter, { borderTopColor: colors.neutral.border }]}>
+                  <Badge
+                    label={status}
+                    variant={status === 'PAID' ? 'solid' : status === 'ISSUED' ? 'outline' : 'muted'}
+                  />
+                  <View style={styles.invActions}>
+                    <Button
+                      label="PDF"
+                      variant="outline"
+                      size="md"
+                      fullWidth={false}
+                      loading={busyId === inv.id}
+                      onPress={() => handleExportPdf(inv.id)}
+                    />
+                    {status === 'DRAFT' ? (
+                      <Button
+                        label={isRTL ? 'إصدار' : 'Issue'}
+                        variant="primary"
+                        size="md"
+                        fullWidth={false}
+                        loading={busyId === inv.id}
+                        onPress={() => handleIssue(inv.id)}
+                      />
+                    ) : null}
+                    {status === 'ISSUED' ? (
+                      <Button
+                        label={isRTL ? 'تأكيد الدفع' : 'Mark Paid'}
+                        variant="primary"
+                        size="md"
+                        fullWidth={false}
+                        loading={busyId === inv.id}
+                        onPress={() => handleMarkPaid(inv)}
+                      />
+                    ) : null}
+                  </View>
+                </View>
+              </Card>
+            );
+          })
+        )}
       </ScrollView>
 
-      {/* ==================================================================== */}
-      {/* INVOICE DETAILS & ACTIONS MODAL                                       */}
-      {/* ==================================================================== */}
-      <SmoothModal
-        visible={!!selectedInvoice}
-        onClose={() => setSelectedInvoice(null)}
-        maxWidth={460}
+      {/* + New Invoice ModalSheet (Manual Entry + Scan Existing Invoice) */}
+      <ModalSheet
+        visible={createOpen}
+        onClose={() => setCreateOpen(false)}
+        title={isRTL ? 'فاتورة ضريبية جديدة' : 'New Tax Invoice'}
       >
-        <View style={{ padding: spacing.lg }}>
-          <View style={styles.modalHeaderRow}>
-            <View>
-              <Text style={styles.modalTitle}>{selectedInvoice?.invoiceNumber}</Text>
-              <Text style={styles.modalSubText}>
-                Article 59 Statutory Tax Document
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => setSelectedInvoice(null)}>
-              <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-            </TouchableOpacity>
-          </View>
-
-          {selectedInvoice && (
-            <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
-              <View style={styles.detailSummaryBox}>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Customer</Text>
-                  <Text style={styles.detailVal}>{selectedInvoice.customerName}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Issue Date</Text>
-                  <Text style={styles.detailVal}>{selectedInvoice.issueDate}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Due Date</Text>
-                  <Text style={styles.detailVal}>{selectedInvoice.dueDate}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Status</Text>
-                  <Text style={[styles.detailVal, { color: colors.brand.primary }]}>
-                    {selectedInvoice.status}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.financialBreakdownCard}>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Net Taxable Amount</Text>
-                  <Text style={styles.detailVal}>
-                    {selectedInvoice.currency}{' '}
-                    {selectedInvoice.subtotalNet.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>UAE VAT (5%)</Text>
-                  <Text style={styles.detailVal}>
-                    {selectedInvoice.currency}{' '}
-                    {selectedInvoice.vatTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </Text>
-                </View>
-                <View style={[styles.detailRow, { borderTopWidth: 1, borderTopColor: colors.neutral.border, paddingTop: 8 }]}>
-                  <Text style={[styles.detailLabel, { fontWeight: '800', color: colors.neutral.textPrimary }]}>
-                    Grand Total
-                  </Text>
-                  <Text style={[styles.detailVal, { fontSize: 16, fontWeight: '900', color: colors.brand.primary }]}>
-                    {selectedInvoice.currency}{' '}
-                    {selectedInvoice.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </Text>
-                </View>
-                {selectedInvoice.amountPaid > 0 && (
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Amount Paid</Text>
-                    <Text style={[styles.detailVal, { color: colors.semantic.successDark }]}>
-                      {selectedInvoice.currency}{' '}
-                      {selectedInvoice.amountPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                )}
-              </View>
-
-              {/* Primary Lifecycle Actions */}
-              <View style={{ gap: 10, marginTop: 12 }}>
-                {selectedInvoice.status === 'DRAFT' && (
-                  <TouchableOpacity
-                    style={styles.modalPrimaryBtn}
-                    onPress={handleIssueDraftInvoice}
-                    disabled={isActionBusy}
-                  >
-                    {isActionBusy ? (
-                      <ActivityIndicator size="small" color={colors.neutral.onPrimary} />
-                    ) : (
-                      <>
-                        <Ionicons name="checkmark-done-circle-outline" size={18} color={colors.neutral.onPrimary} />
-                        <Text style={styles.modalPrimaryBtnText}>Issue Official Tax Invoice</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                )}
-
-                {(selectedInvoice.status === 'ISSUED' ||
-                  selectedInvoice.status === 'PARTIALLY_PAID' ||
-                  selectedInvoice.status === 'OVERDUE') && (
-                  <TouchableOpacity
-                    style={[styles.modalPrimaryBtn, { backgroundColor: colors.semantic.successDark }]}
-                    onPress={handleMarkInvoicePaid}
-                    disabled={isActionBusy}
-                  >
-                    {isActionBusy ? (
-                      <ActivityIndicator size="small" color={colors.neutral.onPrimary} />
-                    ) : (
-                      <>
-                        <Ionicons name="cash-outline" size={18} color={colors.neutral.onPrimary} />
-                        <Text style={styles.modalPrimaryBtnText}>Record Full Payment (Mark Paid)</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                )}
-
-                <TouchableOpacity
-                  style={styles.modalSecondaryBtn}
-                  onPress={handleShareInvoicePdf}
-                  disabled={isActionBusy}
-                >
-                  <Ionicons name="share-outline" size={18} color={colors.neutral.textPrimary} />
-                  <Text style={styles.modalSecondaryBtnText}>Download & Share PDF Invoice</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.modalSecondaryBtn}
-                  onPress={() => {
-                    const invNo = selectedInvoice.invoiceNumber;
-                    setSelectedInvoice(null);
-                    router.push({
-                      pathname: '/invoices/new',
-                      params: { docType: 'CREDIT_NOTE', refInvoice: invNo },
-                    });
-                  }}
-                >
-                  <Ionicons name="document-text-outline" size={18} color={colors.semantic.info} />
-                  <Text style={[styles.modalSecondaryBtnText, { color: colors.semantic.infoText }]}>
-                    Issue Credit Note (Art. 60) Against #{selectedInvoice.invoiceNumber}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-          )}
+        {/* 2-Way Entry Toggle */}
+        <View
+          style={[
+            styles.modeBar,
+            { backgroundColor: colors.neutral.surfaceSubtle, borderColor: colors.neutral.border },
+          ]}
+        >
+          {(
+            [
+              { key: 'manual', label: isRTL ? 'إدخال يدوي' : 'Manual Entry' },
+              { key: 'scan', label: isRTL ? 'مسح فاتورة' : 'Scan Invoice' },
+            ] as const
+          ).map((m) => {
+            const active = createMode === m.key;
+            return (
+              <Pressable
+                key={m.key}
+                onPress={() => setCreateMode(m.key)}
+                style={[styles.modeTab, active && { backgroundColor: colors.neutral.surface }]}
+              >
+                <AppText variant="caption" weight="semiBold" tone={active ? 'primary' : 'secondary'}>
+                  {m.label}
+                </AppText>
+              </Pressable>
+            );
+          })}
         </View>
-      </SmoothModal>
+
+        {createMode === 'scan' ? (
+          <View style={styles.scanBox}>
+            <Ionicons name="camera-outline" size={28} color={colors.neutral.textPrimary} />
+            <AppText variant="bodySmall" tone="secondary" style={styles.centeredText}>
+              {isRTL
+                ? 'صوّر الفاتورة لاستخراج اسم العميل والرقم الضريبي والمبلغ تلقائياً.'
+                : 'Snap an existing invoice to extract Customer Name, TRN, Date, and Amount for review.'}
+            </AppText>
+            <Button
+              label={isRTL ? 'فتح الكاميرا' : 'Scan Existing Invoice'}
+              variant="primary"
+              loading={scanLoading}
+              onPress={handleScanExistingInvoice}
+            />
+          </View>
+        ) : (
+          <View style={styles.manualForm}>
+            <TextField
+              label={isRTL ? 'اسم العميل' : 'Customer Name'}
+              placeholder="Emaar Properties PJSC"
+              value={customerName}
+              onChangeText={setCustomerName}
+            />
+            <TextField
+              label={isRTL ? 'الرقم الضريبي للعميل (اختياري)' : 'Customer TRN (15 digits, Opt.)'}
+              placeholder="100567894300003"
+              value={customerTrn}
+              onChangeText={setCustomerTrn}
+              mono
+              keyboardType="number-pad"
+              maxLength={15}
+            />
+            <TextField
+              label={isRTL ? 'الوصف' : 'Line Item Description'}
+              value={description}
+              onChangeText={setDescription}
+            />
+            <View style={styles.twoCol}>
+              <View style={styles.col}>
+                <TextField
+                  label={isRTL ? 'السعر (درهم)' : 'Unit Price (AED)'}
+                  placeholder="5000"
+                  value={unitPrice}
+                  onChangeText={setUnitPrice}
+                  mono
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={styles.col}>
+                <TextField
+                  label={isRTL ? 'الكمية' : 'Qty'}
+                  value={quantity}
+                  onChangeText={setQuantity}
+                  mono
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+            <View style={styles.filterRow}>
+              {(
+                [
+                  { key: 'STANDARD_5', label: isRTL ? 'ضريبة 5%' : 'Standard 5% VAT' },
+                  { key: 'ZERO_RATED_0', label: isRTL ? 'نسبة الصفر 0%' : 'Zero-Rated 0%' },
+                ] as const
+              ).map((v) => {
+                const active = vatTreatment === v.key;
+                return (
+                  <Pressable
+                    key={v.key}
+                    onPress={() => setVatTreatment(v.key)}
+                    style={[
+                      styles.filterChip,
+                      {
+                        backgroundColor: active ? colors.brand.primary : colors.neutral.surface,
+                        borderColor: active ? colors.brand.primary : colors.neutral.border,
+                      },
+                    ]}
+                  >
+                    <AppText
+                      variant="caption"
+                      weight="semiBold"
+                      tone={active ? 'inverted' : 'primary'}
+                    >
+                      {v.label}
+                    </AppText>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Button
+              label={isRTL ? 'إنشاء مسودة فاتورة' : 'Create Draft Invoice'}
+              variant="primary"
+              loading={saving}
+              onPress={handleCreateInvoice}
+            />
+          </View>
+        )}
+      </ModalSheet>
     </SafeAreaView>
   );
 }
 
-// Dynamic theme-aware stylesheet factory for InvoicesTab
-const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.neutral.canvas,
+const styles = StyleSheet.create({
+  safe: { flex: 1 },
+  scrollContent: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xxl,
+    gap: spacing.md,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    backgroundColor: colors.neutral.canvas,
+    gap: spacing.sm,
   },
-  brandRow: {
+  summaryCard: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flex: 1,
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
-  logoBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: colors.brand.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  brandTitle: {
-    ...fontStyles.displayBold,
-    fontSize: 17,
-    color: colors.neutral.textPrimary,
-  },
-  businessBadgeText: {
-    fontSize: 11,
-    color: colors.neutral.textSecondary,
-    fontWeight: '600',
-    maxWidth: 200,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  headerIconButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.neutral.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-  },
-  notifDot: {
-    position: 'absolute',
-    top: 7,
-    right: 8,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.brand.primary,
-  },
-  avatarButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.neutral.surfaceSubdued,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-  },
-  scrollContent: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-  },
-  pageHeader: {
-    marginBottom: spacing.md,
-  },
-  pageTitle: {
-    ...fontStyles.displayBold,
-    fontSize: 26,
-    color: colors.neutral.textPrimary,
-    marginBottom: 4,
-  },
-  pageSubtitle: {
-    ...fontStyles.bodyRegular,
-    fontSize: 13,
-    color: colors.neutral.textSecondary,
-    lineHeight: 18,
-  },
-  createButton: {
-    backgroundColor: colors.brand.primary,
-    borderRadius: radii.lg,
-    paddingVertical: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.lg,
-    ...shadows.pillButton,
-  },
-  createButtonText: {
-    color: colors.neutral.onPrimary,
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  actionGrid: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: spacing.lg,
-  },
-  actionCard: {
-    flex: 1,
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.md,
+  summaryCol: { gap: 4 },
+  summaryRight: { alignItems: 'flex-end' },
+  summaryMuted: { opacity: 0.78 },
+  feedbackBox: {
+    borderWidth: borders.hairline,
+    borderRadius: radii.sm,
     padding: spacing.sm,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    ...shadows.card,
-  },
-  actionIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 6,
-  },
-  actionCardLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    textAlign: 'center',
   },
   filterRow: {
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: spacing.md,
+    flexWrap: 'wrap',
+    gap: spacing.xs,
   },
-  filterPill: {
-    paddingHorizontal: 16,
-    paddingVertical: 7,
+  filterChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs + 2,
     borderRadius: radii.pill,
-    backgroundColor: colors.neutral.surface,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
+    borderWidth: borders.hairline,
   },
-  filterPillActive: {
-    backgroundColor: colors.brand.primary,
-    borderColor: colors.brand.primary,
+  emptyCard: {
+    gap: spacing.xxs,
+    paddingVertical: spacing.lg,
   },
-  filterPillText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.neutral.textSecondary,
+  invCard: { gap: spacing.sm },
+  invTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
-  filterPillTextActive: {
-    color: colors.neutral.onPrimary,
-  },
-  searchBox: {
+  invInfo: { flex: 1, gap: 2 },
+  invAmounts: { alignItems: 'flex-end', gap: 2 },
+  invFooter: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    marginBottom: spacing.md,
-    gap: 8,
+    justifyContent: 'space-between',
+    paddingTop: spacing.xs,
+    borderTopWidth: borders.hairline,
+    gap: spacing.xs,
   },
-  searchInput: {
-    flex: 1,
-    fontSize: 13,
-    color: colors.neutral.textPrimary,
-  },
-  emptyStateBox: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 40,
-    gap: 8,
-  },
-  emptyStateTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  emptyStateDesc: {
-    fontSize: 12,
-    color: colors.neutral.textSecondary,
-    textAlign: 'center',
-    maxWidth: 240,
-  },
-  emptyCtaBtn: {
+  invActions: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: colors.brand.primary,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 10,
+    gap: spacing.xs,
+  },
+  modeBar: {
+    flexDirection: 'row',
+    padding: 4,
     borderRadius: radii.md,
-    marginTop: 8,
-    ...shadows.sm,
-  },
-  emptyCtaBtnText: {
-    color: colors.neutral.onPrimary,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  listContainer: {
-    gap: 8,
-  },
-  invoiceRowCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.lg,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    gap: 12,
-    ...shadows.card,
-  },
-  invoiceIconCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: colors.brand.primaryMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  invoiceInfoCol: {
-    flex: 1,
-  },
-  invoiceNoText: {
-    ...fontStyles.monoMedium,
-    fontSize: 13,
-    color: colors.neutral.textPrimary,
-  },
-  customerText: {
-    ...fontStyles.bodyRegular,
-    fontSize: 12,
-    color: colors.neutral.textSecondary,
-    marginTop: 1,
-  },
-  dateText: {
-    ...fontStyles.bodyRegular,
-    fontSize: 10,
-    color: colors.neutral.textTertiary,
-    marginTop: 2,
-  },
-  invoiceAmountCol: {
-    alignItems: 'flex-end',
+    borderWidth: borders.hairline,
     gap: 4,
   },
-  amountText: {
-    ...fontStyles.monoMedium,
-    fontSize: 13,
-    color: colors.neutral.textPrimary,
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: radii.pill,
-  },
-  statusBadgePaid: {
-    backgroundColor: colors.semantic.successBg,
-  },
-  statusBadgeDraft: {
-    backgroundColor: colors.neutral.surfaceInset,
-  },
-  statusBadgeOverdue: {
-    backgroundColor: colors.semantic.riskBg,
-  },
-  statusBadgePartPaid: {
-    backgroundColor: colors.semantic.infoBg,
-  },
-  statusBadgeDue: {
-    backgroundColor: colors.semantic.warningBg,
-  },
-  statusBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  statusTextPaid: {
-    color: colors.semantic.successText,
-  },
-  statusTextDraft: {
-    color: colors.neutral.textSecondary,
-  },
-  statusTextOverdue: {
-    color: colors.semantic.riskText,
-  },
-  statusTextDue: {
-    color: colors.semantic.warningText,
-  },
-  modalOverlay: {
+  modeTab: {
     flex: 1,
-    backgroundColor: colors.neutral.scrim,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.lg,
-  },
-  modalCard: {
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.xl,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    ...shadows.cardHover,
-  },
-  modalHeaderRow: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
+    paddingVertical: spacing.xs,
+    borderRadius: radii.sm,
   },
-  modalTitle: {
-    ...fontStyles.displayBold,
-    fontSize: 18,
-    color: colors.neutral.textPrimary,
-  },
-  modalSubText: {
-    fontSize: 11,
-    color: colors.neutral.textSecondary,
-    marginTop: 2,
-  },
-  detailSummaryBox: {
-    backgroundColor: colors.neutral.canvas,
-    borderRadius: radii.md,
-    padding: 12,
-    gap: 8,
-    marginBottom: 12,
-  },
-  financialBreakdownCard: {
-    backgroundColor: colors.neutral.surface,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    borderRadius: radii.md,
-    padding: 12,
-    gap: 8,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  scanBox: {
     alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
   },
-  detailLabel: {
-    fontSize: 12,
-    color: colors.neutral.textSecondary,
-  },
-  detailVal: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-  },
-  modalPrimaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: colors.brand.primary,
-    paddingVertical: 13,
-    borderRadius: radii.md,
-  },
-  modalPrimaryBtnText: {
-    color: colors.neutral.onPrimary,
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  modalSecondaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: colors.neutral.canvas,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    paddingVertical: 12,
-    borderRadius: radii.md,
-  },
-  modalSecondaryBtnText: {
-    color: colors.neutral.textPrimary,
-    fontSize: 12,
-    fontWeight: '700',
-  },
+  centeredText: { textAlign: 'center' },
+  manualForm: { gap: spacing.sm },
+  twoCol: { flexDirection: 'row', gap: spacing.sm },
+  col: { flex: 1 },
 });

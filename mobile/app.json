@@ -7,7 +7,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "backgroundColor": "#F7F6F4",
+    "backgroundColor": "#FAFAFA",
     "ios": {
       "supportsTablet": true
     },

@@ -1,1954 +1,833 @@
 // ============================================================================
-// Mizan (ميزان) - Mandatory Business Entity Onboarding Screen
-// Enforces mandatory business registration before entering the tax intelligence platform.
-// Cannot be skipped or bypassed: users must configure their legal entity, jurisdiction,
-// licensing authority, and revenue to establish tax posture & EmaraTax readiness.
+// Mizan (ميزان) - Business Onboarding Screen (Screen 3)
+// 3-Way UAE Trade License entry (Camera OCR, PDF/Image Upload, Manual) +
+// 3-Step Monochrome Wizard wired to VisionOcr and MizanApi.saveTradeLicense().
 // ============================================================================
 
-import React, { useState, useRef } from 'react';
-import {
-  StyleSheet,
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  ActivityIndicator,
-  Alert,
-  PermissionsAndroid,
-} from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Linking, Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import { SafeAreaView } from '../../src/components/SafeAreaView';
-import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
-import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
-import { useLocale } from '../../src/context/LocaleContext';
-import { useBusiness } from '../../src/context/BusinessContext';
+import { File } from 'expo-file-system';
+import { MizanApi, SaveTradeLicensePayload } from '../../src/services/api';
 import { VisionOcr } from '../../src/services/visionOcr';
-import { EdgeOcrParser } from '../../src/services/edgeOcrParser';
-import { AppPreferences } from '../../src/utils/preferences';
+import { useTheme } from '../../src/context/ThemeContext';
+import { useLocale } from '../../src/context/LocaleContext';
+import { borders, radii, spacing } from '../../src/theme/tokens';
+import { AppText, Badge, Button, Card, ModalSheet, Screen, TextField } from '../../src/ui';
 
-function normalizeDateToISO(raw?: string | null): string {
-  if (!raw) return '';
-  const s = String(raw).trim();
-  if (!s) return '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+type EntryMode = 'scan' | 'upload' | 'manual';
+type EntityType = SaveTradeLicensePayload['legalEntityType'];
+type JurisdictionType = SaveTradeLicensePayload['jurisdictionType'];
 
-  // Match DD/MM/YYYY or DD-MM-YYYY
-  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if (dmy) {
-    const day = dmy[1].padStart(2, '0');
-    const month = dmy[2].padStart(2, '0');
-    const year = dmy[3];
-    return `${year}-${month}-${day}`;
-  }
+const ENTITY_OPTIONS: { value: EntityType; labelEn: string; labelAr: string }[] = [
+  { value: 'LLC', labelEn: 'LLC', labelAr: 'ذ.م.م' },
+  { value: 'FREE_ZONE_COMPANY', labelEn: 'FZCO / FZE', labelAr: 'منطقة حرة' },
+  { value: 'SOLE_ESTABLISHMENT', labelEn: 'Sole Est.', labelAr: 'مؤسسة فردية' },
+  { value: 'NATURAL_PERSON', labelEn: 'Freelancer', labelAr: 'عمل حر' },
+  { value: 'BRANCH_OF_FOREIGN_COMPANY', labelEn: 'Branch', labelAr: 'فرع شركة' },
+];
 
-  // Match YYYY/MM/DD
-  const ymd = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
-  if (ymd) {
-    const year = ymd[1];
-    const month = ymd[2].padStart(2, '0');
-    const day = ymd[3].padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
+const JURISDICTION_OPTIONS: { value: JurisdictionType; labelEn: string; labelAr: string }[] = [
+  { value: 'MAINLAND', labelEn: 'Mainland', labelAr: 'داخل الدولة' },
+  { value: 'FREE_ZONE', labelEn: 'Free Zone', labelAr: 'منطقة حرة' },
+  { value: 'DESIGNATED_FREE_ZONE', labelEn: 'Designated FZ', labelAr: 'منطقة حرة محددة' },
+];
 
-  const d = new Date(s);
-  if (!isNaN(d.getTime())) {
-    return d.toISOString().split('T')[0];
-  }
-  return s;
+/** Normalizes OCR legal form strings into backend LegalEntityType enum values */
+function normalizeEntityType(raw?: string): EntityType {
+  const s = (raw || '').toUpperCase();
+  if (s.includes('FREE') || s.includes('FZE') || s.includes('FZCO')) return 'FREE_ZONE_COMPANY';
+  if (s.includes('SOLE')) return 'SOLE_ESTABLISHMENT';
+  if (s.includes('FREELANCE') || s.includes('NATURAL')) return 'NATURAL_PERSON';
+  if (s.includes('BRANCH')) return 'BRANCH_OF_FOREIGN_COMPANY';
+  return 'LLC';
 }
 
-const LEGAL_ENTITY_TYPES = [
-  { id: 'LLC', labelEn: 'Limited Liability Company (LLC)', labelAr: 'شركة ذات مسؤولية محدودة (ش.ذ.م.م)' },
-  { id: 'SOLE_ESTABLISHMENT', labelEn: 'Sole Establishment', labelAr: 'مؤسسة فردية' },
-  { id: 'FREE_ZONE_COMPANY', labelEn: 'Free Zone Company (FZ-LLC / FZCO)', labelAr: 'شركة منطقة حرة' },
-  { id: 'FREE_ZONE_ESTABLISHMENT', labelEn: 'Free Zone Establishment (FZE)', labelAr: 'مؤسسة منطقة حرة' },
-  { id: 'BRANCH_OF_FOREIGN_COMPANY', labelEn: 'Branch of Foreign / Local Company', labelAr: 'فرع شركة' },
-  { id: 'NATURAL_PERSON', labelEn: 'Natural Person / Freelance Permit', labelAr: 'شخص طبيعي / تصريح عمل حر' },
-];
+/** Normalizes OCR jurisdiction strings into backend JurisdictionType enum values */
+function normalizeJurisdictionType(raw?: string): JurisdictionType {
+  const s = (raw || '').toUpperCase();
+  if (s.includes('DESIGNATED')) return 'DESIGNATED_FREE_ZONE';
+  if (s.includes('FREE') || s.includes('DMCC') || s.includes('JAFZA') || s.includes('IFZA')) {
+    return 'FREE_ZONE';
+  }
+  return 'MAINLAND';
+}
 
-const JURISDICTIONS = [
-  { id: 'MAINLAND', labelEn: 'Mainland UAE', labelAr: 'داخل الدولة (البر الرئيسي)' },
-  { id: 'FREE_ZONE', labelEn: 'Free Zone', labelAr: 'منطقة حرة' },
-  { id: 'DESIGNATED_FREE_ZONE', labelEn: 'Designated Free Zone (VAT Exempt)', labelAr: 'منطقة حرة محددة (ضريبياً)' },
-];
+/**
+ * Reads a local file:// or Android content:// URI as a raw base64 string.
+ * Uses the modern Expo File API first, falling back to fetch + FileReader.
+ */
+async function readUriAsBase64(uri: string): Promise<string> {
+  try {
+    const file = new File(uri);
+    const b64 = await file.base64();
+    if (b64) return b64;
+  } catch {
+    // Fall through to fetch + FileReader for content:// URIs
+  }
 
-const EMIRATES = [
-  { id: 'Dubai', labelEn: 'Dubai', labelAr: 'دبي' },
-  { id: 'Abu Dhabi', labelEn: 'Abu Dhabi', labelAr: 'أبوظبي' },
-  { id: 'Sharjah', labelEn: 'Sharjah', labelAr: 'الشارقة' },
-  { id: 'Ajman', labelEn: 'Ajman', labelAr: 'عجمان' },
-  { id: 'Ras Al Khaimah', labelEn: 'Ras Al Khaimah', labelAr: 'رأس الخيمة' },
-  { id: 'Fujairah', labelEn: 'Fujairah', labelAr: 'الفجيرة' },
-  { id: 'Umm Al Quwain', labelEn: 'Umm Al Quwain', labelAr: 'أم القيوين' },
-];
+  const response = await fetch(uri);
+  const blob = await response.blob();
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const commaIdx = result.indexOf(',');
+      if (commaIdx >= 0) {
+        resolve(result.slice(commaIdx + 1));
+      } else if (result) {
+        resolve(result);
+      } else {
+        reject(new Error('Selected file could not be read.'));
+      }
+    };
+    reader.onerror = () => reject(new Error('Selected file could not be read.'));
+    reader.readAsDataURL(blob);
+  });
+}
 
-const LICENSING_AUTHORITIES: Record<string, string[]> = {
-  MAINLAND: [
-    'Department of Economy and Tourism (DET Dubai)',
-    'Abu Dhabi Department of Economic Development (ADDED)',
-    'Sharjah Economic Development Department (SEDD)',
-    'Ajman Department of Economic Development',
-    'RAK Department of Economic Development',
-    'Fujairah Municipality',
-    'Umm Al Quwain Department of Economic Development',
-  ],
-  FREE_ZONE: [
-    'Dubai Multi Commodities Centre (DMCC)',
-    'Dubai International Financial Centre (DIFC)',
-    'Abu Dhabi Global Market (ADGM)',
-    'Dubai Airport Freezone Authority (DAFZA)',
-    'Sharjah Media City (Shams)',
-    'Ras Al Khaimah Economic Zone (RAKEZ)',
-    'International Free Zone Authority (IFZA)',
-    'Meydan Free Zone',
-    'Ajman Free Zone (AFZ)',
-    'Dubai Silicon Oasis (DSO)',
-    'Jebel Ali Free Zone (JAFZA)',
-    'Sharjah Publishing City (SPC)',
-  ],
-  DESIGNATED_FREE_ZONE: [
-    'Jebel Ali Free Zone (JAFZA) - Designated',
-    'Dubai Airport Freezone (DAFZA) - Designated',
-    'Khalifa Industrial Zone Abu Dhabi (KIZAD)',
-    'Hamriyah Free Zone Sharjah',
-    'RAK Maritime City Free Zone',
-  ],
-};
-
-const BUSINESS_ACTIVITIES = [
-  { id: 'trading', labelEn: 'Commercial & General Trading', labelAr: 'التجارة العامة والمواد التجارية' },
-  { id: 'it_software', labelEn: 'Technology & Software Development', labelAr: 'تقنية المعلومات وتطوير البرمجيات' },
-  { id: 'consulting', labelEn: 'Management & Professional Consulting', labelAr: 'الاستشارات الإدارية والمهنية' },
-  { id: 'ecommerce', labelEn: 'E-Commerce & Digital Services', labelAr: 'التجارة الإلكترونية والخدمات الرقمية' },
-  { id: 'hospitality', labelEn: 'F&B, Restaurants & Hospitality', labelAr: 'الأغذية والمطاعم والضيافة' },
-  { id: 'real_estate', labelEn: 'Real Estate & Property Management', labelAr: 'العقارات وإدارة الممتلكات' },
-  { id: 'logistics', labelEn: 'Logistics, Freight & Transport', labelAr: 'الخدمات اللوجستية والشحن والنقل' },
-  { id: 'marketing', labelEn: 'Marketing, Media & Advertising', labelAr: 'التسويق والدعاية والإعلام' },
-];
-
+/**
+ * Monochrome 3-Way Trade License Onboarding & 3-Step Entity Wizard.
+ */
 export default function BusinessOnboardingScreen() {
   const router = useRouter();
-  const { isRTL, toggleLocale, locale } = useLocale();
-  const { currentUser, addOrUpdateBusiness, refreshBusinesses } = useBusiness();
-  // Resolve theme palette & dynamic styles for Light/Dark onboarding
-  const { colors, isDark } = useTheme();
-  const styles = useThemedStyles(createStyles);
+  const { colors } = useTheme();
+  const { isRTL, toggleLocale } = useLocale();
 
-  // Wizard Step State (1: Entity & Name, 2: Jurisdiction & Authority, 3: Revenue & Tax Profile)
-  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [mode, setMode] = useState<EntryMode>('manual');
+  const [step, setStep] = useState<1 | 2 | 3>(1);
 
-  // Keyboard avoidance and auto-scrolling refs
-  const scrollViewRef = useRef<any>(null);
-  const fieldYPositions = useRef<Record<string, number>>({});
-
-  // Field touched tracking for real-time validation visual indicators
-  const [touched, setTouched] = useState<Record<string, boolean>>({});
-
-  const markTouched = (field: string) => {
-    setTouched((prev) => ({ ...prev, [field]: true }));
-  };
-
-  /**
-   * Tracks vertical layout position of each form field
-   */
-  const handleFieldLayout = (key: string, y: number) => {
-    fieldYPositions.current[key] = y;
-  };
-
-  /**
-   * Smoothly scrolls the focused input so it sits comfortably right above the soft keyboard
-   */
-  const handleFieldFocus = (key: string) => {
-    markTouched(key);
-    const y = fieldYPositions.current[key];
-    if (y !== undefined && scrollViewRef.current) {
-      scrollViewRef.current.scrollTo({
-        y: Math.max(0, y - 40),
-        animated: true,
-      });
-    }
-  };
-
-  // Form Fields - Initialized empty without dummy/fake defaults
+  // Step 1: Entity Identity
   const [legalName, setLegalName] = useState('');
-  const [tradeName, setTradeName] = useState('');
-  const [legalEntityType, setLegalEntityType] = useState<string>('LLC');
-  const [jurisdictionType, setJurisdictionType] = useState<string>('MAINLAND');
-  const [licensingAuthority, setLicensingAuthority] = useState<string>(
-    'Department of Economy and Tourism (DET Dubai)'
-  );
-  const [emirate, setEmirate] = useState<string>('Dubai');
-  const [tradeLicenseNumber, setTradeLicenseNumber] = useState<string>('');
-  const [expiryDate, setExpiryDate] = useState<string>('');
-  const [revenueAED, setRevenueAED] = useState<string>('');
-  const [hasVatTrn, setHasVatTrn] = useState(false);
+  const [tradeLicenseNumber, setTradeLicenseNumber] = useState('');
+  const [legalEntityType, setLegalEntityType] = useState<EntityType>('LLC');
+
+  // Step 2: Jurisdiction & Authority
+  const [jurisdictionType, setJurisdictionType] = useState<JurisdictionType>('MAINLAND');
+  const [emirate, setEmirate] = useState('Dubai');
+  const [licensingAuthority, setLicensingAuthority] = useState('DET (DED)');
+  const [issueDate, setIssueDate] = useState('');
+  const [expiryDate, setExpiryDate] = useState('');
+
+  // Step 3: Revenue & Tax Profile
+  const [annualRevenue, setAnnualRevenue] = useState('');
   const [vatTrn, setVatTrn] = useState('');
-  const [hasCorporateTaxTrn, setHasCorporateTaxTrn] = useState(false);
   const [corporateTaxTrn, setCorporateTaxTrn] = useState('');
-  const [selectedActivities, setSelectedActivities] = useState<string[]>(['trading']);
-  const [address, setAddress] = useState('');
 
-  const parsedRevenue = parseFloat(revenueAED) || 0;
-  const isSbrEligible = parsedRevenue > 0 && parsedRevenue <= 3000000;
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [permissionPrompt, setPermissionPrompt] = useState<'camera' | 'files' | null>(null);
+  const [settingsRequired, setSettingsRequired] = useState(false);
 
-  // Onboarding Setup Mode: 'SELECT' (Choose between Camera Scan, File Upload, or Manual) | 'FORM' (Step-by-step form)
-  const [entryMode, setEntryMode] = useState<'SELECT' | 'FORM'>('SELECT');
-  const [isOcrProcessing, setIsOcrProcessing] = useState(false);
-  const [ocrStatusText, setOcrStatusText] = useState('');
-  const [extractedBadge, setExtractedBadge] = useState<string | null>(null);
+  const parsedRevenue = useMemo(() => {
+    const cleaned = annualRevenue.replace(/[^0-9.]/g, '');
+    return cleaned ? Number(cleaned) : 0;
+  }, [annualRevenue]);
 
-  /**
-   * Process photo or document base64 through AI Vision OCR and populate form fields
-   */
-  const processLicenseImage = async (base64Data: string, mimeType: string = 'image/jpeg') => {
-    setIsOcrProcessing(true);
-    setOcrStatusText(
-      isRTL
-        ? 'جارٍ استخراج البيانات...'
-        : 'Extracting details...'
-    );
-    setErrorMessage(null);
+  const isSbrEligible = parsedRevenue > 0 && parsedRevenue <= 3_000_000;
 
+  /** Populates wizard fields from OCR extraction and switches to Manual review */
+  const applyOcrResult = async (base64: string, mimeType: string) => {
+    setError(null);
+    setOcrLoading(true);
     try {
-      const extracted = await VisionOcr.extractTradeLicense(base64Data, mimeType);
-
-      if (extracted) {
-        const foundName = extracted.businessName || extracted.businessNameAr;
-        if (foundName) {
-          setLegalName(foundName);
-          setTradeName(foundName);
-          markTouched('legalName');
-        }
-
-        if (extracted.licenseNumber) {
-          setTradeLicenseNumber(extracted.licenseNumber);
-          markTouched('tradeLicenseNumber');
-        }
-
-        if (extracted.expiryDate) {
-          setExpiryDate(normalizeDateToISO(extracted.expiryDate));
-        }
-
-        // Legal structure heuristic matching
-        const formRaw = (extracted.legalForm || '').toLowerCase();
-        if (formRaw.includes('free zone') || formRaw.includes('fz')) {
-          setLegalEntityType('FREE_ZONE_COMPANY');
-          setJurisdictionType('FREE_ZONE');
-        } else if (formRaw.includes('sole') || formRaw.includes('مؤسسة فردية')) {
-          setLegalEntityType('SOLE_ESTABLISHMENT');
-        } else if (formRaw.includes('branch')) {
-          setLegalEntityType('BRANCH_OF_FOREIGN_COMPANY');
-        } else {
-          setLegalEntityType('LLC');
-        }
-
-        // Jurisdiction heuristic matching
-        const jurisRaw = (extracted.jurisdiction || '').toLowerCase();
-        if (jurisRaw.includes('free zone')) {
-          setJurisdictionType('FREE_ZONE');
-        } else {
-          setJurisdictionType('MAINLAND');
-        }
-
-        setExtractedBadge(
-          isRTL
-            ? '✨ تم استخراج البيانات بنجاح! راجع البيانات وأكمل النموذج أدناه.'
-            : '✨ Details extracted! Review your details and complete the steps below.'
-        );
-        AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
+      const extracted = await VisionOcr.extractTradeLicense(base64, mimeType);
+      if (extracted.businessName) setLegalName(extracted.businessName);
+      if (extracted.licenseNumber) setTradeLicenseNumber(extracted.licenseNumber);
+      if (extracted.legalForm) setLegalEntityType(normalizeEntityType(extracted.legalForm));
+      if (extracted.jurisdiction) {
+        setJurisdictionType(normalizeJurisdictionType(extracted.jurisdiction));
+        setLicensingAuthority(extracted.jurisdiction);
       }
+      if (extracted.issueDate) setIssueDate(extracted.issueDate);
+      if (extracted.expiryDate) setExpiryDate(extracted.expiryDate);
 
-      // Transition smoothly into form wizard
-      setEntryMode('FORM');
-      setCurrentStep(1);
-      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
-    } catch (ocrErr: any) {
-      console.warn('OCR Extraction error:', ocrErr);
-      Alert.alert(
-        isRTL ? 'تنبيه استخراج المستند' : 'Trade License OCR Notice',
-        ocrErr?.message || (isRTL
-          ? 'تم استلام المستند ولكن تعذر التعرف على بعض الحقول بدقة. يرجى إكمال النموذج يدوياً.'
-          : 'Document received. Some fields could not be recognized with statutory confidence. Please complete details manually.'),
-        [
-          {
-            text: isRTL ? 'إكمال النموذج يدوياً' : 'Complete Manually',
-            onPress: () => {
-              setEntryMode('FORM');
-              setCurrentStep(1);
-            },
-          },
-        ]
+      // Switch to Manual wizard at Step 1 for user confirmation
+      setMode('manual');
+      setStep(1);
+    } catch (err: any) {
+      setError(
+        err?.message ||
+          (isRTL
+            ? 'تعذر استخراج بيانات الرخصة. يمكنك الإدخال يدوياً.'
+            : 'Could not extract Trade License details. You can enter them manually.')
       );
     } finally {
-      setIsOcrProcessing(false);
+      setOcrLoading(false);
     }
   };
 
-  /**
-   * Option 1: Live camera capture with automatic permission request
-   */
-  const handleScanWithCamera = async () => {
+  /** Requests OS camera permission and launches native camera */
+  const handleCameraScan = async () => {
+    setError(null);
+    setSettingsRequired(false);
     try {
-      AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
-      // Automatically triggers system permission popup if not granted yet
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert(
-          isRTL ? 'إذن الكاميرا مطلوب' : 'Camera Permission Required',
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        setSettingsRequired(!perm.canAskAgain);
+        setError(
           isRTL
-            ? 'يرجى السماح بالوصول إلى الكاميرا لالتقاط صورة الرخصة التجارية.'
-            : 'Please grant camera access to photograph your UAE trade license.'
+            ? 'تم رفض إذن الكاميرا. اسمح بالوصول من الإعدادات أو استخدم الإدخال اليدوي.'
+            : 'Camera permission denied. Allow access in Settings or use Manual entry.'
         );
         return;
       }
+      setPermissionPrompt(null);
 
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
-        allowsEditing: true,
         quality: 0.85,
         base64: true,
       });
 
-      if (!result.canceled && result.assets?.[0]?.base64) {
+      if (!result.canceled && result.assets?.[0]) {
         const asset = result.assets[0];
-        await processLicenseImage(asset.base64!, asset.mimeType || 'image/jpeg');
+        const base64 = asset.base64 || (await readUriAsBase64(asset.uri));
+        await applyOcrResult(base64, asset.mimeType || 'image/jpeg');
       }
     } catch (err: any) {
-      console.warn('Camera launch error:', err);
-      Alert.alert(
-        isRTL ? 'خطأ في الكاميرا' : 'Camera Launch Error',
-        err?.message || (isRTL ? 'تعذر تشغيل الكاميرا' : 'Could not launch camera')
-      );
-    }
-  };
-
-  /**
-   * Option 2: Upload trade license file or image from device
-   */
-  const handleUploadDocument = async () => {
-    try {
-      AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
-
-      // Prompt native Android OS permission dialog for file & media access
-      if (Platform.OS === 'android') {
-        try {
-          if (Number(Platform.Version) >= 33) {
-            await PermissionsAndroid.request(
-              PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
-              {
-                title: isRTL ? 'إذن الوصول للملفات والوسائط' : 'File & Media Access',
-                message: isRTL
-                  ? 'يتطلب ميزان إذن الوصول للملفات لاختيار ملف الرخصة التجارية.'
-                  : 'Mizan requires access to your files to select your UAE Trade License.',
-                buttonPositive: isRTL ? 'موافق' : 'Allow',
-                buttonNegative: isRTL ? 'إلغاء' : 'Cancel',
-              }
-            );
-          } else {
-            await PermissionsAndroid.request(
-              PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-              {
-                title: isRTL ? 'إذن قراءة الملفات' : 'Storage Access',
-                message: isRTL
-                  ? 'يتطلب ميزان إذن الوصول للملفات لاختيار ملف الرخصة التجارية.'
-                  : 'Mizan requires access to your files to select your Trade License document.',
-                buttonPositive: isRTL ? 'موافق' : 'Allow',
-                buttonNegative: isRTL ? 'إلغاء' : 'Cancel',
-              }
-            );
-          }
-        } catch (permErr) {
-          console.warn('Android permissions request notice:', permErr);
-        }
-      } else {
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
-      }
-
-      // Open system file manager (supports both PDF documents and images)
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*'],
-        copyToCacheDirectory: true,
-      });
-
-      if (!result.canceled && result.assets?.[0]?.uri) {
-        const asset = result.assets[0];
-        const isPdf = asset.name?.toLowerCase().endsWith('.pdf') || asset.mimeType?.includes('pdf');
-        const mimeType = isPdf ? 'application/pdf' : asset.mimeType || 'image/jpeg';
-
-        // Read file contents as base64 using the official expo-file-system/legacy API
-        const base64 = await FileSystem.readAsStringAsync(asset.uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-
-        await processLicenseImage(base64, mimeType);
-      }
-    } catch (err: any) {
-      console.warn('Document picker error:', err);
-      Alert.alert(
-        isRTL ? 'خطأ في فتح الملف' : 'Document Selection Error',
-        err?.message || (isRTL ? 'تعذر فتح مدير الملفات' : 'Could not access documents')
-      );
-    }
-  };
-
-  /**
-   * Option 3: Manual entry mode
-   */
-  const handleManualEntryMode = () => {
-    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
-    setExtractedBadge(null);
-    setEntryMode('FORM');
-    setCurrentStep(1);
-    scrollViewRef.current?.scrollTo({ y: 0, animated: true });
-  };
-
-  const handleNextStep = () => {
-    setErrorMessage(null);
-    if (currentStep === 1) {
-      markTouched('legalName');
-      markTouched('tradeLicenseNumber');
-
-      if (!legalName.trim() || legalName.trim().length < 2) {
-        setErrorMessage(
-          isRTL ? 'يرجى إدخال اسم المنشأة القانوني (حرفان على الأقل)' : 'Please enter your registered legal business name'
-        );
-        AppPreferences.notification(Haptics.NotificationFeedbackType.Error);
-        handleFieldFocus('legalName');
-        return;
-      }
-      if (!tradeLicenseNumber.trim() || tradeLicenseNumber.trim().length < 3) {
-        setErrorMessage(
-          isRTL ? 'يرجى إدخال رقم الرخصة التجارية الصادرة' : 'Please enter your registered trade license number'
-        );
-        AppPreferences.notification(Haptics.NotificationFeedbackType.Error);
-        handleFieldFocus('tradeLicenseNumber');
-        return;
-      }
-      AppPreferences.selection();
-      setCurrentStep(2);
-      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
-      return;
-    }
-
-    if (currentStep === 2) {
-      if (!licensingAuthority.trim()) {
-        setErrorMessage(
-          isRTL ? 'يرجى اختيار جهة الترخيص' : 'Please select your licensing authority'
-        );
-        AppPreferences.notification(Haptics.NotificationFeedbackType.Error);
-        return;
-      }
-      AppPreferences.selection();
-      setCurrentStep(3);
-      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
-      return;
-    }
-  };
-
-  const handlePrevStep = () => {
-    setErrorMessage(null);
-    if (currentStep === 2) setCurrentStep(1);
-    if (currentStep === 3) setCurrentStep(2);
-    AppPreferences.selection();
-  };
-
-  const toggleActivity = (id: string) => {
-    setSelectedActivities((prev) =>
-      prev.includes(id) ? prev.filter((a) => a !== id) : [...prev, id]
-    );
-    AppPreferences.selection();
-  };
-
-  const handleCompleteRegistration = async () => {
-    markTouched('legalName');
-    markTouched('tradeLicenseNumber');
-    markTouched('revenueAED');
-
-    if (!legalName.trim() || legalName.trim().length < 2) {
-      setErrorMessage(
-        isRTL ? 'يرجى إدخال اسم المنشأة القانوني' : 'Please enter your registered legal business name'
-      );
-      setCurrentStep(1);
-      handleFieldFocus('legalName');
-      return;
-    }
-
-    if (!tradeLicenseNumber.trim() || tradeLicenseNumber.trim().length < 3) {
-      setErrorMessage(
-        isRTL ? 'يرجى إدخال رقم الرخصة التجارية' : 'Please enter your trade license number'
-      );
-      setCurrentStep(1);
-      handleFieldFocus('tradeLicenseNumber');
-      return;
-    }
-
-    if (!revenueAED.trim() || isNaN(parsedRevenue) || parsedRevenue <= 0) {
-      setErrorMessage(
-        isRTL
-          ? 'يرجى إدخال الإيرادات السنوية التقديرية بالدرهم لحساب وضع ضريبة الشركات'
-          : 'Please enter a valid estimated annual revenue in AED'
-      );
-      handleFieldFocus('revenueAED');
-      return;
-    }
-
-    if (hasVatTrn) {
-      markTouched('vatTrn');
-      if (!vatTrn.trim() || vatTrn.trim().length !== 15) {
-        setErrorMessage(
-          isRTL
-            ? 'رقم التسجيل الضريبي للضريبة على القيمة المضافة (TRN) يجب أن يتكون من 15 رقماً'
-            : 'VAT TRN must be exactly 15 digits'
-        );
-        handleFieldFocus('vatTrn');
-        return;
-      }
-    }
-
-    if (hasCorporateTaxTrn) {
-      markTouched('corporateTaxTrn');
-      if (!corporateTaxTrn.trim() || corporateTaxTrn.trim().length !== 15) {
-        setErrorMessage(
-          isRTL
-            ? 'رقم التسجيل الضريبي لضريبة الشركات يجب أن يتكون من 15 رقماً'
-            : 'Corporate Tax TRN must be exactly 15 digits'
-        );
-        handleFieldFocus('corporateTaxTrn');
-        return;
-      }
-    }
-
-    try {
-      setIsSubmitting(true);
-      setErrorMessage(null);
-
-      const taxRegimeDescription = isSbrEligible
-        ? `${jurisdictionType === 'FREE_ZONE' ? 'Free Zone' : 'Mainland'} ${legalEntityType} • SBR 0% Relief Eligible (≤ AED 3M)`
-        : `${jurisdictionType === 'FREE_ZONE' ? 'Free Zone' : 'Mainland'} ${legalEntityType} • Standard 9% UAE Corporate Tax`;
-
-      await addOrUpdateBusiness({
-        legalName: legalName.trim(),
-        tradeName: tradeName.trim() || legalName.trim(),
-        legalEntityType,
-        jurisdictionType,
-        licensingAuthority,
-        emirate,
-        tradeLicenseNumber: tradeLicenseNumber.trim(),
-        expiryDate: normalizeDateToISO(expiryDate) || undefined,
-        annualRevenueEstimateAED: parsedRevenue,
-        vatTrn: hasVatTrn && vatTrn.trim() ? vatTrn.trim() : undefined,
-        corporateTaxTrn: hasCorporateTaxTrn && corporateTaxTrn.trim() ? corporateTaxTrn.trim() : undefined,
-        address: address.trim(),
-        businessActivities: selectedActivities,
-        taxRegime: taxRegimeDescription,
-        isSbrEligible,
-        isQfzpEligible: jurisdictionType === 'FREE_ZONE' || jurisdictionType === 'DESIGNATED_FREE_ZONE',
-        verificationStatus: 'REGISTRY_VERIFIED',
-      });
-
-      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
-
-      // Successfully registered business -> Navigate to Dashboard
-      router.replace('/(tabs)');
-    } catch (err: any) {
-      AppPreferences.notification(Haptics.NotificationFeedbackType.Error);
-      setErrorMessage(
+      setPermissionPrompt(null);
+      setError(
         err?.message ||
           (isRTL
-            ? 'تعذر تسجيل المنشأة. يرجى المحاولة مرة أخرى.'
-            : 'Failed to complete business registration. Please try again.')
+            ? 'تعذر فتح الكاميرا أو قراءة الصورة.'
+            : 'Could not open camera or read captured image.')
+      );
+    }
+  };
+
+  /** Requests media/files permission and opens native document picker */
+  const handleDocumentUpload = async () => {
+    setError(null);
+    setSettingsRequired(false);
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted && !perm.canAskAgain) {
+        setSettingsRequired(true);
+      }
+      setPermissionPrompt(null);
+
+      // Keep copyToCacheDirectory: false so content:// URIs are read directly without cache IO issues
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'image/*'],
+        copyToCacheDirectory: false,
+      });
+
+      if (!result.canceled && result.assets?.[0]) {
+        const asset = result.assets[0];
+        if (asset.size && asset.size > 10 * 1024 * 1024) {
+          setError(
+            isRTL
+              ? 'حجم الملف يتجاوز 10 ميغابايت. يرجى اختيار ملف أصغر.'
+              : 'File exceeds 10 MB limit. Please choose a smaller PDF or image.'
+          );
+          return;
+        }
+        const base64 = await readUriAsBase64(asset.uri);
+        await applyOcrResult(base64, asset.mimeType || 'application/pdf');
+      }
+    } catch (err: any) {
+      setPermissionPrompt(null);
+      setError(
+        err?.message ||
+          (isRTL
+            ? 'تعذر قراءة الملف المختار. جرب ملفاً آخر أو أدخل البيانات يدوياً.'
+            : 'Could not read the selected file. Try another file or enter details manually.')
+      );
+    }
+  };
+
+  /** Validates current step before advancing or submitting */
+  const handleNext = async () => {
+    setError(null);
+
+    if (step === 1) {
+      if (!legalName.trim() || !tradeLicenseNumber.trim()) {
+        setError(
+          isRTL
+            ? 'يرجى إدخال الاسم القانوني ورقم الرخصة التجارية.'
+            : 'Legal Name and Trade License Number are required.'
+        );
+        return;
+      }
+      setStep(2);
+      return;
+    }
+
+    if (step === 2) {
+      if (!licensingAuthority.trim()) {
+        setError(
+          isRTL ? 'يرجى إدخال جهة الترخيص.' : 'Licensing Authority is required.'
+        );
+        return;
+      }
+      setStep(3);
+      return;
+    }
+
+    // Step 3: Validate optional 15-digit TRNs if provided
+    const cleanVat = vatTrn.replace(/\s+/g, '');
+    if (cleanVat.length > 0 && !/^\d{15}$/.test(cleanVat)) {
+      setError(
+        isRTL
+          ? 'رقم ضريبة القيمة المضافة يجب أن يتكون من 15 رقماً.'
+          : 'UAE VAT TRN must be exactly 15 digits.'
+      );
+      return;
+    }
+    const cleanCt = corporateTaxTrn.replace(/\s+/g, '');
+    if (cleanCt.length > 0 && !/^\d{15}$/.test(cleanCt)) {
+      setError(
+        isRTL
+          ? 'رقم ضريبة الشركات يجب أن يتكون من 15 رقماً.'
+          : 'UAE Corporate Tax TRN must be exactly 15 digits.'
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const payload: SaveTradeLicensePayload = {
+        legalName: legalName.trim(),
+        tradeLicenseNumber: tradeLicenseNumber.trim(),
+        legalEntityType,
+        jurisdictionType,
+        licensingAuthority: licensingAuthority.trim(),
+        ...(emirate.trim() ? { emirate: emirate.trim() } : {}),
+        ...(issueDate.trim() ? { issueDate: issueDate.trim() } : {}),
+        ...(expiryDate.trim() ? { expiryDate: expiryDate.trim() } : {}),
+        ...(parsedRevenue > 0 ? { annualRevenueEstimateAED: parsedRevenue } : {}),
+        ...(cleanVat ? { vatTrn: cleanVat } : {}),
+        ...(cleanCt ? { corporateTaxTrn: cleanCt } : {}),
+      };
+
+      await MizanApi.saveTradeLicense(payload);
+      router.replace('/(tabs)');
+    } catch (err: any) {
+      setError(
+        err?.message ||
+          (isRTL ? 'تعذر حفظ بيانات المنشأة.' : 'Failed to save business entity.')
       );
     } finally {
-      setIsSubmitting(false);
+      setSubmitting(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 44 : 20}
-      >
-        <ScrollView
-          ref={scrollViewRef}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: 280 }]}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
-          automaticallyAdjustKeyboardInsets={true}
-        >
-          {/* Header Bar */}
-          <View style={[styles.topBar, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-            <View style={[styles.brandRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-              <View style={styles.brandLogoBox}>
-                <View style={styles.logoSlantBar1} />
-                <View style={styles.logoSlantBar2} />
-              </View>
-              <Text style={styles.brandTitle}>Mizan ميزان</Text>
-            </View>
+    <Screen scroll keyboardAvoiding contentContainerStyle={styles.scrollContent}>
+      {/* Top Bar */}
+      <View style={styles.topBar}>
+        <Badge
+          label={isRTL ? `الخطوة ${step} من 3` : `Step ${step} of 3`}
+          variant="outline"
+        />
+        <View style={styles.topActions}>
+          <Pressable
+            onPress={toggleLocale}
+            style={[
+              styles.pillBtn,
+              { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
+            ]}
+          >
+            <AppText variant="caption" weight="semiBold">
+              {isRTL ? 'EN' : 'العربية'}
+            </AppText>
+          </Pressable>
+          <Pressable
+            onPress={async () => {
+              await MizanApi.logout();
+              router.replace('/auth/login');
+            }}
+            style={[
+              styles.pillBtn,
+              { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
+            ]}
+          >
+            <AppText variant="caption" weight="medium" tone="secondary">
+              {isRTL ? 'خروج' : 'Sign Out'}
+            </AppText>
+          </Pressable>
+        </View>
+      </View>
 
-            <TouchableOpacity style={styles.langPill} onPress={toggleLocale} activeOpacity={0.7}>
-              <Ionicons name="language-outline" size={16} color={colors.neutral.textPrimary} />
-              <Text style={styles.langText}>{locale === 'en' ? 'العربية' : 'English'}</Text>
-            </TouchableOpacity>
+      {/* Header */}
+      <View style={styles.header}>
+        <AppText variant="h1">
+          {isRTL ? 'تسجيل المنشأة الإماراتية' : 'Register UAE Business'}
+        </AppText>
+        <AppText variant="bodySmall" tone="secondary">
+          {isRTL
+            ? 'امسح الرخصة التجارية أو أدخل البيانات يدوياً'
+            : 'Scan your Trade License or enter entity details manually'}
+        </AppText>
+      </View>
+
+      {/* 3-Way Segmented Entry Control */}
+      <View
+        style={[
+          styles.modeBar,
+          { backgroundColor: colors.neutral.surfaceSubtle, borderColor: colors.neutral.border },
+        ]}
+      >
+        {(
+          [
+            { key: 'scan', en: 'Scan', ar: 'مسح' },
+            { key: 'upload', en: 'Upload', ar: 'رفع ملف' },
+            { key: 'manual', en: 'Manual', ar: 'يدوي' },
+          ] as const
+        ).map((tab) => {
+          const active = mode === tab.key;
+          return (
+            <Pressable
+              key={tab.key}
+              onPress={() => {
+                setError(null);
+                setMode(tab.key);
+              }}
+              style={[
+                styles.modeTab,
+                active && { backgroundColor: colors.neutral.surface },
+              ]}
+            >
+              <AppText
+                variant="caption"
+                weight="semiBold"
+                tone={active ? 'primary' : 'secondary'}
+              >
+                {isRTL ? tab.ar : tab.en}
+              </AppText>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {/* Error Banner */}
+      {error ? (
+        <View
+          style={[
+            styles.errorBox,
+            {
+              backgroundColor: colors.neutral.surfaceSubtle,
+              borderColor: colors.neutral.borderStrong,
+            },
+          ]}
+        >
+          <AppText variant="bodySmall" weight="semiBold">
+            ! {error}
+          </AppText>
+        </View>
+      ) : null}
+
+      {/* Mode: Scan or Upload */}
+      {mode !== 'manual' ? (
+        <Card style={styles.ocrCard}>
+          <View style={[styles.ocrBadge, { borderColor: colors.neutral.borderStrong }]}>
+            <AppText variant="bodySmall" weight="bold">
+              OCR
+            </AppText>
+          </View>
+          <AppText variant="h3" style={styles.centeredText}>
+            {mode === 'scan'
+              ? isRTL
+                ? 'تصوير الرخصة التجارية'
+                : 'Capture UAE Trade License'
+              : isRTL
+                ? 'رفع ملف PDF أو صورة'
+                : 'Upload License PDF or Image'}
+          </AppText>
+          <AppText variant="bodySmall" tone="secondary" style={styles.centeredText}>
+            {isRTL
+              ? 'يستخرج رقم الرخصة والاسم القانوني وجهة الترخيص تلقائياً.'
+              : 'Automatically extracts License No., Legal Name, Authority, and Dates across all 7 Emirates.'}
+          </AppText>
+          <Button
+            label={
+              mode === 'scan'
+                ? isRTL
+                  ? 'فتح الكاميرا'
+                  : 'Open Camera Scanner'
+                : isRTL
+                  ? 'اختيار ملف'
+                  : 'Choose File'
+            }
+            loading={ocrLoading}
+            onPress={() => {
+              setError(null);
+              setSettingsRequired(false);
+              setPermissionPrompt(mode === 'scan' ? 'camera' : 'files');
+            }}
+          />
+        </Card>
+      ) : (
+        /* Mode: 3-Step Manual Wizard */
+        <Card style={styles.wizardCard}>
+          {/* Progress Bar */}
+          <View style={styles.stepBarRow}>
+            {[1, 2, 3].map((s) => (
+              <View
+                key={s}
+                style={[
+                  styles.stepSegment,
+                  {
+                    backgroundColor:
+                      s <= step ? colors.brand.primary : colors.neutral.border,
+                  },
+                ]}
+              />
+            ))}
           </View>
 
-          {/* 3-Mode Selection View OR Step-by-Step Form Wizard */}
-          {entryMode === 'SELECT' ? (
-            <View>
-              {/* Onboarding Mode Selection Header */}
-              <View style={styles.headerBlock}>
-                <View style={styles.badgeRow}>
-                  <View style={styles.requiredBadge}>
-                    <Ionicons name="shield-checkmark" size={14} color={colors.brand.primary} />
-                    <Text style={styles.requiredBadgeText}>
-                      {isRTL ? 'إعداد المنشأة الضريبية' : 'Tax Entity Onboarding'}
-                    </Text>
-                  </View>
-                </View>
-                <Text style={[styles.pageTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'كيف تفضل إدخال بيانات منشأتك؟' : 'How would you like to set up your business?'}
-                </Text>
-                <Text style={[styles.pageSubtitle, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL
-                    ? 'اختر إحدى الطرق التالية لربط منشأتك بحسابك وتفعيل نظام الامتثال الضريبي وفقاً لقوانين دولة الإمارات.'
-                    : 'Choose one of the 3 setup options below to establish your tax profile with official UAE compliance.'}
-                </Text>
-              </View>
-
-              {/* Error Banner if any */}
-              {errorMessage && (
-                <View style={styles.errorBanner}>
-                  <Ionicons name="alert-circle" size={18} color={colors.semantic.risk} />
-                  <Text style={[styles.errorBannerText, { textAlign: isRTL ? 'right' : 'left' }]}>
-                    {errorMessage}
-                  </Text>
-                </View>
-              )}
-
-              {/* OCR Loading Overlay Card if processing */}
-              {isOcrProcessing ? (
-                <View style={styles.ocrLoadingCard}>
-                  <ActivityIndicator size="large" color={colors.brand.primary} />
-                  <Text style={styles.ocrLoadingTitle}>
-                    {isRTL ? 'جارٍ قراءة بيانات الرخصة بالذكاء الاصطناعي...' : 'Extracting Trade License with AI...'}
-                  </Text>
-                  <Text style={styles.ocrLoadingSubtext}>
-                    {ocrStatusText || (isRTL ? 'يرجى الانتظار ثوانٍ معدودة...' : 'Reading legal name, license number, and dates...')}
-                  </Text>
-                </View>
-              ) : (
-                <View style={styles.methodCardsContainer}>
-                  {/* Option 1: Scan Trade License with Camera */}
-                  <TouchableOpacity
-                    style={[styles.methodCard, styles.methodCardRecommended]}
-                    onPress={handleScanWithCamera}
-                    activeOpacity={0.8}
-                  >
-                    <View style={[styles.methodCardTopRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                      <View style={[styles.methodIconCircle, styles.methodIconCirclePrimary]}>
-                        <Ionicons name="camera" size={24} color={colors.brand.primary} />
-                      </View>
-                      <View style={[styles.methodBadge, styles.methodBadgePrimary]}>
-                        <Text style={[styles.methodBadgeText, styles.methodBadgeTextPrimary]}>
-                          {isRTL ? 'موصى به • فوري' : 'Recommended • Instant'}
-                        </Text>
-                      </View>
-                    </View>
-                    <Text style={[styles.methodTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
-                      {isRTL ? 'مسح الرخصة التجارية بالكاميرا' : 'Scan Trade License (Camera)'}
-                    </Text>
-                    <Text style={[styles.methodDesc, { textAlign: isRTL ? 'right' : 'left' }]}>
-                      {isRTL
-                        ? 'التقاط صورة للرخصة التجارية الصادرة في الدولة. سيقوم الذكاء الاصطناعي بقراءة وتعبئة بيانات المنشأة فوراً.'
-                        : 'Take a photo of your UAE Trade License. AI Vision will automatically read and populate company name, license number, and validity dates.'}
-                    </Text>
-                    <View style={[styles.methodActionRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                      <Text style={styles.methodActionText}>
-                        {isRTL ? 'فتح الكاميرا للمسح ←' : 'Open Camera to Scan →'}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-
-                  {/* Option 2: Upload Trade License Document */}
-                  <TouchableOpacity
-                    style={styles.methodCard}
-                    onPress={handleUploadDocument}
-                    activeOpacity={0.8}
-                  >
-                    <View style={[styles.methodCardTopRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                      <View style={styles.methodIconCircle}>
-                        <Ionicons name="cloud-upload" size={22} color={colors.brand.primary} />
-                      </View>
-                      <View style={styles.methodBadge}>
-                        <Text style={styles.methodBadgeText}>
-                          {isRTL ? 'ملف أو صورة' : 'Photo or File'}
-                        </Text>
-                      </View>
-                    </View>
-                    <Text style={[styles.methodTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
-                      {isRTL ? 'رفع ملف أو صورة الرخصة' : 'Upload License Document'}
-                    </Text>
-                    <Text style={[styles.methodDesc, { textAlign: isRTL ? 'right' : 'left' }]}>
-                      {isRTL
-                        ? 'رفع صورة أو مستند الرخصة التجارية المحفوظ في جهازك لاستخراج البيانات تلقائياً.'
-                        : 'Upload an existing photo or document of your Trade License from your device for automatic data recognition.'}
-                    </Text>
-                    <View style={[styles.methodActionRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                      <Text style={styles.methodActionText}>
-                        {isRTL ? 'اختيار ملف من الجهاز ←' : 'Select File from Device →'}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-
-                  {/* Option 3: Enter Details Manually */}
-                  <TouchableOpacity
-                    style={styles.methodCard}
-                    onPress={handleManualEntryMode}
-                    activeOpacity={0.8}
-                  >
-                    <View style={[styles.methodCardTopRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                      <View style={styles.methodIconCircle}>
-                        <Ionicons name="create-outline" size={22} color={colors.neutral.textPrimary} />
-                      </View>
-                      <View style={styles.methodBadge}>
-                        <Text style={styles.methodBadgeText}>
-                          {isRTL ? 'إدخال يدوي' : 'Manual Entry'}
-                        </Text>
-                      </View>
-                    </View>
-                    <Text style={[styles.methodTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
-                      {isRTL ? 'إدخال البيانات يدوياً' : 'Enter Details Manually'}
-                    </Text>
-                    <Text style={[styles.methodDesc, { textAlign: isRTL ? 'right' : 'left' }]}>
-                      {isRTL
-                        ? 'إدخال اسم المنشأة، رقم الرخصة، جهة الترخيص، والإيرادات يدوياً خطوة بخطوة.'
-                        : 'Type in your trade license number, business authority, jurisdiction, and revenue through our guided form.'}
-                    </Text>
-                    <View style={[styles.methodActionRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                      <Text style={styles.methodActionText}>
-                        {isRTL ? 'بدء الإدخال اليدوي ←' : 'Start Manual Entry →'}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-
-                  {/* Statutory Trust Notice */}
-                  <View style={[styles.complianceNoticeBox, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                    <Ionicons name="shield-checkmark" size={18} color={colors.brand.primary} />
-                    <Text style={[styles.complianceNoticeText, { textAlign: isRTL ? 'right' : 'left' }]}>
-                      {isRTL
-                        ? 'بياناتك مشفرة بالكامل ومتوافقة 100% مع معايير الهيئة الاتحادية للضرائب وقانون ضريبة الشركات الإماراتي.'
-                        : 'Encrypted & 100% compliant with UAE Federal Decree-Law No. 47 of 2022 on the Taxation of Corporations.'}
-                    </Text>
-                  </View>
-                </View>
-              )}
-            </View>
-          ) : (
-            <View>
-              {/* Back to Method Selection Action */}
-              <TouchableOpacity
-                style={[styles.backToMethodsBtn, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}
-                onPress={() => {
-                  AppPreferences.selection();
-                  setEntryMode('SELECT');
-                }}
-                activeOpacity={0.7}
-              >
-                <Ionicons name={isRTL ? 'arrow-forward' : 'arrow-back'} size={15} color={colors.brand.primary} />
-                <Text style={styles.backToMethodsText}>
-                  {isRTL ? '← تغيير طريقة الإدخال (مسح / رفع / يدوي)' : '← Change setup method (Scan / Upload / Manual)'}
-                </Text>
-              </TouchableOpacity>
-
-              {/* OCR Auto-Extracted Success Badge */}
-              {extractedBadge && (
-                <View style={[styles.ocrSuccessBanner, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                  <Ionicons name="sparkles" size={18} color={colors.semantic.successDark} />
-                  <Text style={[styles.ocrSuccessBannerText, { textAlign: isRTL ? 'right' : 'left' }]}>
-                    {extractedBadge}
-                  </Text>
-                </View>
-              )}
-
-              {/* Stepper Header */}
-              <View style={styles.headerBlock}>
-                <View style={styles.badgeRow}>
-                  <View style={styles.requiredBadge}>
-                    <Ionicons name="shield-checkmark" size={14} color={colors.brand.primary} />
-                    <Text style={styles.requiredBadgeText}>
-                      {isRTL ? 'تسجيل منشأة إلزامي' : 'Mandatory Business Registration'}
-                    </Text>
-                  </View>
-                </View>
-                <Text style={[styles.pageTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'سجّل منشأتك لتفعيل الحساب' : 'Register Your UAE Business'}
-                </Text>
-                <Text style={[styles.pageSubtitle, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL
-                    ? 'وفقاً لمتطلبات الهيئة الاتحادية للضرائب وقانون ضريبة الشركات، يجب ربط المنشأة بحسابك للوصول إلى التحليلات والإقرارات.'
-                    : 'Under UAE Federal Tax Authority statutory requirements, you must register your verified business entity before accessing tax compliance and bookkeeping.'}
-                </Text>
-              </View>
-
-          {/* Progress Indicator */}
-          <View style={styles.stepsIndicatorRow}>
-            {[1, 2, 3].map((step) => {
-              const isActive = currentStep === step;
-              const isDone = currentStep > step;
-              return (
-                <View key={step} style={styles.stepTrackItem}>
-                  <View
-                    style={[
-                      styles.stepCircle,
-                      isDone && styles.stepCircleDone,
-                      isActive && styles.stepCircleActive,
-                    ]}
-                  >
-                    {isDone ? (
-                      <Ionicons name="checkmark" size={14} color={colors.neutral.onPrimary} />
-                    ) : (
-                      <Text
+          {step === 1 ? (
+            <View style={styles.stepFields}>
+              <TextField
+                label={isRTL ? 'الاسم القانوني' : 'Legal Name'}
+                placeholder="Al Nahda Trading LLC"
+                value={legalName}
+                onChangeText={setLegalName}
+              />
+              <TextField
+                label={isRTL ? 'رقم الرخصة التجارية' : 'Trade License Number'}
+                placeholder="CN-4829104"
+                value={tradeLicenseNumber}
+                onChangeText={setTradeLicenseNumber}
+                mono
+              />
+              <View>
+                <AppText variant="bodySmall" weight="medium" tone="secondary" style={styles.chipLabel}>
+                  {isRTL ? 'الشكل القانوني' : 'Legal Entity Type'}
+                </AppText>
+                <View style={styles.chipWrap}>
+                  {ENTITY_OPTIONS.map((opt) => {
+                    const selected = legalEntityType === opt.value;
+                    return (
+                      <Pressable
+                        key={opt.value}
+                        onPress={() => setLegalEntityType(opt.value)}
                         style={[
-                          styles.stepNumberText,
-                          isActive && styles.stepNumberTextActive,
+                          styles.chip,
+                          {
+                            backgroundColor: selected
+                              ? colors.brand.primary
+                              : colors.neutral.surface,
+                            borderColor: selected
+                              ? colors.brand.primary
+                              : colors.neutral.border,
+                          },
                         ]}
                       >
-                        {step}
-                      </Text>
-                    )}
-                  </View>
-                  <Text
-                    style={[
-                      styles.stepLabelText,
-                      isActive && styles.stepLabelTextActive,
-                    ]}
-                  >
-                    {step === 1
-                      ? isRTL ? 'الاسم والشكل' : 'Entity & Name'
-                      : step === 2
-                      ? isRTL ? 'الترخيص والإمارة' : 'Licensing'
-                      : isRTL ? 'الضريبة والإيراد' : 'Tax & Revenue'}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-
-          {/* Error Banner */}
-          {errorMessage && (
-            <View style={styles.errorBanner}>
-              <Ionicons name="alert-circle" size={18} color={colors.semantic.risk} />
-              <Text style={[styles.errorBannerText, { textAlign: isRTL ? 'right' : 'left' }]}>
-                {errorMessage}
-              </Text>
-            </View>
-          )}
-
-          {/* ================================================================ */}
-          {/* STEP 1: ENTITY NAME & LEGAL STRUCTURE                            */}
-          {/* ================================================================ */}
-          {currentStep === 1 && (
-            <View style={styles.card}>
-              <Text style={[styles.cardSectionTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
-                {isRTL ? 'البيانات القانونية للمنشأة' : 'Company Legal Information'}
-              </Text>
-
-              {/* Legal Name */}
-              <View
-                style={styles.fieldGroup}
-                onLayout={(e) => handleFieldLayout('legalName', e.nativeEvent.layout.y)}
-              >
-                <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'الاسم القانوني للمنشأة *' : 'Legal Business Name *'}
-                </Text>
-                <View
-                  style={[
-                    styles.inputContainer,
-                    { flexDirection: isRTL ? 'row-reverse' : 'row' },
-                    touched.legalName && (!legalName.trim() || legalName.trim().length < 2) && styles.inputContainerError,
-                  ]}
-                >
-                  <Ionicons
-                    name="business-outline"
-                    size={18}
-                    color={touched.legalName && (!legalName.trim() || legalName.trim().length < 2) ? colors.semantic.risk : colors.neutral.textTertiary}
-                  />
-                  <TextInput
-                    style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
-                    value={legalName}
-                    onChangeText={(val) => {
-                      setLegalName(val);
-                      if (errorMessage) setErrorMessage(null);
-                    }}
-                    onFocus={() => handleFieldFocus('legalName')}
-                    placeholder={isRTL ? 'مثال: شركة نور الإتقان للتجارة العامة ش.ذ.م.م' : 'e.g. Noor Al Itqan General Trading LLC'}
-                    placeholderTextColor={colors.neutral.textTertiary}
-                    keyboardAppearance={isDark ? 'dark' : 'light'}
-                    autoCapitalize="words"
-                  />
-                </View>
-                {touched.legalName && (!legalName.trim() || legalName.trim().length < 2) && (
-                  <Text style={[styles.inlineErrorText, { textAlign: isRTL ? 'right' : 'left' }]}>
-                    {isRTL ? 'الاسم القانوني للمنشأة مطلوب (حرفان على الأقل)' : 'Legal business name is required (at least 2 characters)'}
-                  </Text>
-                )}
-              </View>
-
-              {/* Trade Name */}
-              <View
-                style={styles.fieldGroup}
-                onLayout={(e) => handleFieldLayout('tradeName', e.nativeEvent.layout.y)}
-              >
-                <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'الاسم التجاري (الشهرة)' : 'Trade Name (Commercial Brand)'}
-                </Text>
-                <View style={[styles.inputContainer, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                  <Ionicons name="pricetag-outline" size={18} color={colors.neutral.textTertiary} />
-                  <TextInput
-                    style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
-                    value={tradeName}
-                    onChangeText={setTradeName}
-                    onFocus={() => handleFieldFocus('tradeName')}
-                    placeholder={isRTL ? 'مثال: نور الإتقان (اختياري)' : 'e.g. Noor Al Itqan (Optional)'}
-                    placeholderTextColor={colors.neutral.textTertiary}
-                    keyboardAppearance={isDark ? 'dark' : 'light'}
-                  />
-                </View>
-              </View>
-
-              {/* Trade License Number */}
-              <View
-                style={styles.fieldGroup}
-                onLayout={(e) => handleFieldLayout('tradeLicenseNumber', e.nativeEvent.layout.y)}
-              >
-                <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'رقم الرخصة التجارية *' : 'Trade License Number *'}
-                </Text>
-                <View
-                  style={[
-                    styles.inputContainer,
-                    { flexDirection: isRTL ? 'row-reverse' : 'row' },
-                    touched.tradeLicenseNumber && (!tradeLicenseNumber.trim() || tradeLicenseNumber.trim().length < 3) && styles.inputContainerError,
-                  ]}
-                >
-                  <Ionicons
-                    name="document-text-outline"
-                    size={18}
-                    color={touched.tradeLicenseNumber && (!tradeLicenseNumber.trim() || tradeLicenseNumber.trim().length < 3) ? colors.semantic.risk : colors.neutral.textTertiary}
-                  />
-                  <TextInput
-                    style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
-                    value={tradeLicenseNumber}
-                    onChangeText={(val) => {
-                      setTradeLicenseNumber(val);
-                      if (errorMessage) setErrorMessage(null);
-                    }}
-                    onFocus={() => handleFieldFocus('tradeLicenseNumber')}
-                    placeholder="e.g. 1029384 or CN-1294820"
-                    placeholderTextColor={colors.neutral.textTertiary}
-                    keyboardAppearance={isDark ? 'dark' : 'light'}
-                    autoCapitalize="characters"
-                  />
-                </View>
-                {touched.tradeLicenseNumber && (!tradeLicenseNumber.trim() || tradeLicenseNumber.trim().length < 3) && (
-                  <Text style={[styles.inlineErrorText, { textAlign: isRTL ? 'right' : 'left' }]}>
-                    {isRTL ? 'رقم الرخصة التجارية الصادر من دائرة التنمية أو المنطقة الحرة مطلوب' : 'Trade license number issued by authority is required (min 3 chars)'}
-                  </Text>
-                )}
-              </View>
-
-              {/* Legal Entity Type Selector */}
-              <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'الشكل القانوني *' : 'Legal Entity Type *'}
-                </Text>
-                <View style={styles.optionsWrap}>
-                  {LEGAL_ENTITY_TYPES.map((type) => {
-                    const isSelected = legalEntityType === type.id;
-                    return (
-                      <TouchableOpacity
-                        key={type.id}
-                        style={[styles.selectablePill, isSelected && styles.selectablePillActive]}
-                        onPress={() => {
-                          setLegalEntityType(type.id);
-                          AppPreferences.selection();
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons
-                          name={isSelected ? 'radio-button-on' : 'radio-button-off'}
-                          size={16}
-                          color={isSelected ? colors.brand.primary : colors.neutral.textTertiary}
-                        />
-                        <Text style={[styles.selectablePillText, isSelected && styles.selectablePillTextActive]}>
-                          {isRTL ? type.labelAr : type.labelEn}
-                        </Text>
-                      </TouchableOpacity>
+                        <AppText
+                          variant="caption"
+                          weight="semiBold"
+                          tone={selected ? 'inverted' : 'primary'}
+                        >
+                          {isRTL ? opt.labelAr : opt.labelEn}
+                        </AppText>
+                      </Pressable>
                     );
                   })}
                 </View>
               </View>
             </View>
-          )}
+          ) : null}
 
-          {/* ================================================================ */}
-          {/* STEP 2: JURISDICTION & LICENSING                                */}
-          {/* ================================================================ */}
-          {currentStep === 2 && (
-            <View style={styles.card}>
-              <Text style={[styles.cardSectionTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
-                {isRTL ? 'بيانات الولاية القضائية والترخيص' : 'Jurisdiction & Licensing Authority'}
-              </Text>
-
-              {/* Jurisdiction Type */}
-              <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'نوع الولاية القضائية *' : 'Jurisdiction Type *'}
-                </Text>
-                <View style={styles.optionsWrap}>
-                  {JURISDICTIONS.map((j) => {
-                    const isSelected = jurisdictionType === j.id;
+          {step === 2 ? (
+            <View style={styles.stepFields}>
+              <View>
+                <AppText variant="bodySmall" weight="medium" tone="secondary" style={styles.chipLabel}>
+                  {isRTL ? 'النطاق القانوني' : 'Jurisdiction'}
+                </AppText>
+                <View style={styles.chipWrap}>
+                  {JURISDICTION_OPTIONS.map((opt) => {
+                    const selected = jurisdictionType === opt.value;
                     return (
-                      <TouchableOpacity
-                        key={j.id}
-                        style={[styles.selectablePill, isSelected && styles.selectablePillActive]}
-                        onPress={() => {
-                          setJurisdictionType(j.id);
-                          const authorities = LICENSING_AUTHORITIES[j.id] || LICENSING_AUTHORITIES.MAINLAND;
-                          setLicensingAuthority(authorities[0]);
-                          AppPreferences.selection();
-                        }}
-                        activeOpacity={0.7}
+                      <Pressable
+                        key={opt.value}
+                        onPress={() => setJurisdictionType(opt.value)}
+                        style={[
+                          styles.chip,
+                          {
+                            backgroundColor: selected
+                              ? colors.brand.primary
+                              : colors.neutral.surface,
+                            borderColor: selected
+                              ? colors.brand.primary
+                              : colors.neutral.border,
+                          },
+                        ]}
                       >
-                        <Ionicons
-                          name={isSelected ? 'shield-checkmark' : 'ellipse-outline'}
-                          size={16}
-                          color={isSelected ? colors.brand.primary : colors.neutral.textTertiary}
-                        />
-                        <Text style={[styles.selectablePillText, isSelected && styles.selectablePillTextActive]}>
-                          {isRTL ? j.labelAr : j.labelEn}
-                        </Text>
-                      </TouchableOpacity>
+                        <AppText
+                          variant="caption"
+                          weight="semiBold"
+                          tone={selected ? 'inverted' : 'primary'}
+                        >
+                          {isRTL ? opt.labelAr : opt.labelEn}
+                        </AppText>
+                      </Pressable>
                     );
                   })}
                 </View>
               </View>
 
-              {/* Emirate Selector */}
-              <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'الإمارة *' : 'Emirate *'}
-                </Text>
-                <View style={styles.optionsWrap}>
-                  {EMIRATES.map((em) => {
-                    const isSelected = emirate === em.id;
-                    return (
-                      <TouchableOpacity
-                        key={em.id}
-                        style={[styles.selectablePillSmall, isSelected && styles.selectablePillActive]}
-                        onPress={() => {
-                          setEmirate(em.id);
-                          AppPreferences.selection();
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={[styles.selectablePillText, isSelected && styles.selectablePillTextActive]}>
-                          {isRTL ? em.labelAr : em.labelEn}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+              <View style={styles.rowTwoCol}>
+                <View style={styles.col}>
+                  <TextField
+                    label={isRTL ? 'الإمارة' : 'Emirate'}
+                    placeholder="Dubai"
+                    value={emirate}
+                    onChangeText={setEmirate}
+                  />
                 </View>
-              </View>
-
-              {/* Licensing Authority */}
-              <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'جهة إصدار الرخصة *' : 'Licensing Authority *'}
-                </Text>
-                <View style={styles.optionsWrap}>
-                  {(LICENSING_AUTHORITIES[jurisdictionType] || LICENSING_AUTHORITIES.MAINLAND).map((authName) => {
-                    const isSelected = licensingAuthority === authName;
-                    return (
-                      <TouchableOpacity
-                        key={authName}
-                        style={[styles.selectablePill, isSelected && styles.selectablePillActive]}
-                        onPress={() => {
-                          setLicensingAuthority(authName);
-                          AppPreferences.selection();
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons
-                          name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
-                          size={16}
-                          color={isSelected ? colors.brand.primary : colors.neutral.textTertiary}
-                        />
-                        <Text style={[styles.selectablePillText, isSelected && styles.selectablePillTextActive]}>
-                          {authName}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
-
-              {/* Registered Address */}
-              <View
-                style={styles.fieldGroup}
-                onLayout={(e) => handleFieldLayout('address', e.nativeEvent.layout.y)}
-              >
-                <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'عنوان المقر المسجل (اختياري)' : 'Registered Office Address (Optional)'}
-                </Text>
-                <View style={[styles.inputContainer, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                  <Ionicons name="location-outline" size={18} color={colors.neutral.textTertiary} />
-                  <TextInput
-                    style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
-                    value={address}
-                    onChangeText={setAddress}
-                    onFocus={() => handleFieldFocus('address')}
-                    placeholder={isRTL ? 'مثال: برج الخليج، الخليج التجاري، دبي' : 'e.g. Office 402, Business Bay, Dubai'}
-                    placeholderTextColor={colors.neutral.textTertiary}
-                    keyboardAppearance={isDark ? 'dark' : 'light'}
+                <View style={styles.col}>
+                  <TextField
+                    label={isRTL ? 'جهة الترخيص' : 'Authority'}
+                    placeholder="DET (DED)"
+                    value={licensingAuthority}
+                    onChangeText={setLicensingAuthority}
                   />
                 </View>
               </View>
             </View>
-          )}
+          ) : null}
 
-          {/* ================================================================ */}
-          {/* STEP 3: TAX POSTURE, REVENUE & TRN                              */}
-          {/* ================================================================ */}
-          {currentStep === 3 && (
-            <View style={styles.card}>
-              <Text style={[styles.cardSectionTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
-                {isRTL ? 'الملف الضريبي والإيرادات التقديرية' : 'Tax Posture & Estimated Turnover'}
-              </Text>
-
-              {/* Annual Turnover / Revenue in AED */}
-              <View
-                style={styles.fieldGroup}
-                onLayout={(e) => handleFieldLayout('revenueAED', e.nativeEvent.layout.y)}
-              >
-                <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'الإيرادات السنوية التقديرية (درهم إماراتي) *' : 'Estimated Annual Turnover (AED) *'}
-                </Text>
+          {step === 3 ? (
+            <View style={styles.stepFields}>
+              <TextField
+                label={isRTL ? 'الإيرادات السنوية المقدرة (درهم)' : 'Est. Annual Revenue (AED)'}
+                placeholder="1250000"
+                value={annualRevenue}
+                onChangeText={setAnnualRevenue}
+                mono
+                keyboardType="numeric"
+              />
+              <TextField
+                label={isRTL ? 'رقم ضريبة القيمة المضافة (اختياري)' : 'VAT TRN (15 digits, Opt.)'}
+                placeholder="100458923100003"
+                value={vatTrn}
+                onChangeText={setVatTrn}
+                mono
+                keyboardType="number-pad"
+                maxLength={15}
+              />
+              <TextField
+                label={isRTL ? 'رقم ضريبة الشركات (اختياري)' : 'Corporate Tax TRN (Opt.)'}
+                placeholder="100458923100003"
+                value={corporateTaxTrn}
+                onChangeText={setCorporateTaxTrn}
+                mono
+                keyboardType="number-pad"
+                maxLength={15}
+              />
+              {isSbrEligible ? (
                 <View
                   style={[
-                    styles.inputContainer,
-                    { flexDirection: isRTL ? 'row-reverse' : 'row' },
-                    touched.revenueAED && (!revenueAED.trim() || isNaN(parsedRevenue) || parsedRevenue <= 0) && styles.inputContainerError,
-                  ]}
-                >
-                  <Text style={{ fontWeight: '700', color: touched.revenueAED && (!revenueAED.trim() || isNaN(parsedRevenue) || parsedRevenue <= 0) ? colors.semantic.risk : colors.brand.primary }}>AED</Text>
-                  <TextInput
-                    style={[styles.input, { textAlign: isRTL ? 'right' : 'left', fontSize: 16, fontWeight: '700' }]}
-                    value={revenueAED}
-                    onChangeText={(val) => {
-                      setRevenueAED(val);
-                      if (errorMessage) setErrorMessage(null);
-                    }}
-                    onFocus={() => handleFieldFocus('revenueAED')}
-                    keyboardType="numeric"
-                    keyboardAppearance={isDark ? 'dark' : 'light'}
-                    placeholder="e.g. 1500000"
-                    placeholderTextColor={colors.neutral.textTertiary}
-                  />
-                </View>
-                {touched.revenueAED && (!revenueAED.trim() || isNaN(parsedRevenue) || parsedRevenue <= 0) && (
-                  <Text style={[styles.inlineErrorText, { textAlign: isRTL ? 'right' : 'left' }]}>
-                    {isRTL ? 'يرجى إدخال الإيرادات السنوية التقديرية بالدرهم' : 'Please enter valid estimated annual revenue (AED)'}
-                  </Text>
-                )}
-
-                {/* Dynamic SBR / Corporate Tax Callout */}
-                <View
-                  style={[
-                    styles.taxPostureBadge,
+                    styles.sbrBanner,
                     {
-                      backgroundColor: parsedRevenue > 0 && isSbrEligible ? colors.semantic.successBg : parsedRevenue > 0 ? colors.semantic.infoBg : colors.neutral.surfaceSubdued,
-                      borderColor: parsedRevenue > 0 && isSbrEligible ? colors.semantic.successBorder : parsedRevenue > 0 ? colors.semantic.infoBorder : colors.neutral.border,
+                      backgroundColor: colors.neutral.surfaceSubtle,
+                      borderColor: colors.neutral.border,
                     },
                   ]}
                 >
-                  <Ionicons
-                    name={parsedRevenue > 0 && isSbrEligible ? 'checkmark-circle' : 'information-circle'}
-                    size={20}
-                    color={parsedRevenue > 0 && isSbrEligible ? colors.semantic.success : parsedRevenue > 0 ? colors.semantic.info : colors.neutral.textTertiary}
-                  />
-                  <View style={{ flex: 1, marginHorizontal: 8 }}>
-                    <Text
-                      style={[
-                        styles.taxPostureTitle,
-                        { color: parsedRevenue > 0 && isSbrEligible ? colors.semantic.successText : parsedRevenue > 0 ? colors.semantic.infoText : colors.neutral.textPrimary },
-                        { textAlign: isRTL ? 'right' : 'left' },
-                      ]}
-                    >
-                      {parsedRevenue === 0
-                        ? isRTL
-                          ? 'محدد ضريبة الشركات وإعفاء الأعمال الصغيرة'
-                          : 'Corporate Tax & SBR Determination Engine'
-                        : isSbrEligible
-                        ? isRTL
-                          ? 'مؤهل لإعفاء الأعمال الصغيرة (نسبة ضريبة 0%)'
-                          : 'Eligible for Small Business Relief (0% Tax)'
-                        : isRTL
-                        ? 'تخضع للنظام الضريبي القياسي (9%)'
-                        : 'Standard Corporate Tax Regime (9%)'}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.taxPostureDesc,
-                        { textAlign: isRTL ? 'right' : 'left' },
-                      ]}
-                    >
-                      {parsedRevenue === 0
-                        ? isRTL
-                          ? 'أدخل إيراداتك التقديرية لتحديد ما إذا كانت منشأتك مؤهلة للإعفاء بنسبة 0% بموجب القرار الوزاري رقم 73 لسنة 2023.'
-                          : 'Enter your turnover to calculate whether you qualify for 0% Small Business Relief under Ministerial Decision No. 73 of 2023.'
-                        : isSbrEligible
-                        ? isRTL
-                          ? 'بموجب القرار الوزاري رقم 73 لسنة 2023، إذا كانت إيراداتك لا تتجاوز 3 ملايين درهم، يمكنك المطالبة بإعفاء الأعمال الصغيرة بنسبة 0% حتى نهاية 2026.'
-                          : 'Turnover ≤ AED 3,000,000 qualifies for 0% Corporate Tax under Ministerial Decision No. 73 of 2023.'
-                        : isRTL
-                        ? 'الإيرادات تتجاوز 3 ملايين درهم، وتخضع الأرباح الخاضعة للضريبة فوق 375,000 درهم لنسبة 9%.'
-                        : 'Turnover > AED 3,000,000: Taxable profits exceeding AED 375,000 are taxed at the statutory 9% rate.'}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* VAT Registration Toggle */}
-              <View style={styles.toggleRow}>
-                <TouchableOpacity
-                  style={[styles.checkboxRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}
-                  onPress={() => setHasVatTrn(!hasVatTrn)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name={hasVatTrn ? 'checkbox' : 'square-outline'}
-                    size={22}
-                    color={hasVatTrn ? colors.brand.primary : colors.neutral.textTertiary}
-                  />
-                  <Text style={[styles.checkboxLabel, { textAlign: isRTL ? 'right' : 'left' }]}>
+                  <AppText variant="caption" tone="secondary">
                     {isRTL
-                      ? 'المنشأة مسجلة لضريبة القيمة المضافة (لديها TRN)'
-                      : 'Business is already registered for UAE VAT (Has VAT TRN)'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* VAT TRN Input */}
-              {hasVatTrn && (
-                <View
-                  style={styles.fieldGroup}
-                  onLayout={(e) => handleFieldLayout('vatTrn', e.nativeEvent.layout.y)}
-                >
-                  <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                    {isRTL ? 'رقم التسجيل الضريبي لضريبة القيمة المضافة (15 رقماً) *' : '15-Digit VAT TRN *'}
-                  </Text>
-                  <View
-                    style={[
-                      styles.inputContainer,
-                      { flexDirection: isRTL ? 'row-reverse' : 'row' },
-                      touched.vatTrn && (!vatTrn.trim() || vatTrn.trim().length !== 15 || !vatTrn.trim().startsWith('100')) && styles.inputContainerError,
-                    ]}
-                  >
-                    <Ionicons
-                      name="receipt-outline"
-                      size={18}
-                      color={touched.vatTrn && (!vatTrn.trim() || vatTrn.trim().length !== 15 || !vatTrn.trim().startsWith('100')) ? colors.semantic.risk : colors.neutral.textTertiary}
-                    />
-                    <TextInput
-                      style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
-                      value={vatTrn}
-                      onChangeText={(val) => {
-                        setVatTrn(val);
-                        if (errorMessage) setErrorMessage(null);
-                      }}
-                      onFocus={() => handleFieldFocus('vatTrn')}
-                      keyboardType="numeric"
-                      keyboardAppearance={isDark ? 'dark' : 'light'}
-                      maxLength={15}
-                      placeholder="100XXXXXXXX0003"
-                      placeholderTextColor={colors.neutral.textTertiary}
-                    />
-                  </View>
-                  {touched.vatTrn && (!vatTrn.trim() || vatTrn.trim().length !== 15 || !vatTrn.trim().startsWith('100')) && (
-                    <Text style={[styles.inlineErrorText, { textAlign: isRTL ? 'right' : 'left' }]}>
-                      {isRTL ? 'رقم التسجيل لضريبة القيمة المضافة يجب أن يتكون من 15 رقماً ويبدأ بـ 100' : 'UAE VAT TRN must be exactly 15 digits starting with 100'}
-                    </Text>
-                  )}
+                      ? 'أقل من 3,000,000 درهم: مؤهل لإعفاء الأعمال الصغيرة (0% ضريبة شركات).'
+                      : 'Under AED 3,000,000: Eligible for Small Business Relief (0% CT under MD 73/2023).'}
+                  </AppText>
                 </View>
-              )}
-
-              {/* Corporate Tax TRN Toggle */}
-              <View style={styles.toggleRow}>
-                <TouchableOpacity
-                  style={[styles.checkboxRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}
-                  onPress={() => setHasCorporateTaxTrn(!hasCorporateTaxTrn)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name={hasCorporateTaxTrn ? 'checkbox' : 'square-outline'}
-                    size={22}
-                    color={hasCorporateTaxTrn ? colors.brand.primary : colors.neutral.textTertiary}
-                  />
-                  <Text style={[styles.checkboxLabel, { textAlign: isRTL ? 'right' : 'left' }]}>
-                    {isRTL
-                      ? 'تم إصدار رقم التسجيل لضريبة الشركات من الهيئة الاتحادية للضرائب'
-                      : 'Has Corporate Tax Registration Number from FTA'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Corporate Tax TRN Input */}
-              {hasCorporateTaxTrn && (
-                <View
-                  style={styles.fieldGroup}
-                  onLayout={(e) => handleFieldLayout('corporateTaxTrn', e.nativeEvent.layout.y)}
-                >
-                  <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                    {isRTL ? 'رقم تسجيل ضريبة الشركات (15 رقماً) *' : '15-Digit Corporate Tax Registration Number *'}
-                  </Text>
-                  <View
-                    style={[
-                      styles.inputContainer,
-                      { flexDirection: isRTL ? 'row-reverse' : 'row' },
-                      touched.corporateTaxTrn && (!corporateTaxTrn.trim() || corporateTaxTrn.trim().length !== 15) && styles.inputContainerError,
-                    ]}
-                  >
-                    <Ionicons
-                      name="card-outline"
-                      size={18}
-                      color={touched.corporateTaxTrn && (!corporateTaxTrn.trim() || corporateTaxTrn.trim().length !== 15) ? colors.semantic.risk : colors.neutral.textTertiary}
-                    />
-                    <TextInput
-                      style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
-                      value={corporateTaxTrn}
-                      onChangeText={(val) => {
-                        setCorporateTaxTrn(val);
-                        if (errorMessage) setErrorMessage(null);
-                      }}
-                      onFocus={() => handleFieldFocus('corporateTaxTrn')}
-                      keyboardType="numeric"
-                      keyboardAppearance={isDark ? 'dark' : 'light'}
-                      maxLength={15}
-                      placeholder="e.g. 100123456789003"
-                      placeholderTextColor={colors.neutral.textTertiary}
-                    />
-                  </View>
-                  {touched.corporateTaxTrn && (!corporateTaxTrn.trim() || corporateTaxTrn.trim().length !== 15) && (
-                    <Text style={[styles.inlineErrorText, { textAlign: isRTL ? 'right' : 'left' }]}>
-                      {isRTL ? 'رقم تسجيل ضريبة الشركات يجب أن يتكون من 15 رقماً' : 'Corporate Tax TRN must be exactly 15 digits'}
-                    </Text>
-                  )}
-                </View>
-              )}
-
-              {/* Business Activities Tag Cloud */}
-              <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { textAlign: isRTL ? 'right' : 'left' }]}>
-                  {isRTL ? 'الأنشطة التجارية الرئيسية' : 'Primary Business Activities'}
-                </Text>
-                <View style={styles.optionsWrap}>
-                  {BUSINESS_ACTIVITIES.map((act) => {
-                    const isSelected = selectedActivities.includes(act.id);
-                    return (
-                      <TouchableOpacity
-                        key={act.id}
-                        style={[styles.activityPill, isSelected && styles.activityPillActive]}
-                        onPress={() => toggleActivity(act.id)}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons
-                          name={isSelected ? 'checkmark-circle' : 'add-circle-outline'}
-                          size={16}
-                          color={isSelected ? colors.brand.primary : colors.neutral.textTertiary}
-                        />
-                        <Text style={[styles.activityPillText, isSelected && styles.activityPillTextActive]}>
-                          {isRTL ? act.labelAr : act.labelEn}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
+              ) : null}
             </View>
-          )}
+          ) : null}
 
-          {/* Navigation Action Buttons */}
-          <View style={[styles.actionButtonsRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-            {currentStep > 1 && (
-              <TouchableOpacity
-                style={styles.backButton}
-                onPress={handlePrevStep}
-                disabled={isSubmitting}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name={isRTL ? 'arrow-forward' : 'arrow-back'}
-                  size={18}
-                  color={colors.neutral.textPrimary}
-                />
-                <Text style={styles.backButtonText}>{isRTL ? 'السابق' : 'Back'}</Text>
-              </TouchableOpacity>
-            )}
-
-            {currentStep < 3 ? (
-              <TouchableOpacity
-                style={[styles.primaryButton, { flex: 1 }]}
-                onPress={handleNextStep}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.primaryButtonText}>{isRTL ? 'التالي' : 'Continue'}</Text>
-                <Ionicons
-                  name={isRTL ? 'arrow-back' : 'arrow-forward'}
-                  size={18}
-                  color={colors.neutral.onPrimary}
-                />
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={[styles.primaryButton, { flex: 1 }, isSubmitting && styles.buttonDisabled]}
-                onPress={handleCompleteRegistration}
-                disabled={isSubmitting}
-                activeOpacity={0.85}
-              >
-                {isSubmitting ? (
-                  <ActivityIndicator color={colors.neutral.onPrimary} size="small" />
-                ) : (
-                  <>
-                    <Ionicons name="checkmark-done-circle" size={20} color={colors.neutral.onPrimary} />
-                    <Text style={styles.primaryButtonText}>
-                      {isRTL ? 'تسجيل المنشأة والدخول' : 'Register Business & Enter'}
-                    </Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            )}
+          {/* Wizard Step Navigation */}
+          <View style={styles.navRow}>
+            {step > 1 ? (
+              <Button
+                label={isRTL ? 'السابق' : 'Previous'}
+                variant="outline"
+                fullWidth={false}
+                style={styles.navBtn}
+                onPress={() => setStep((prev) => (prev === 3 ? 2 : 1))}
+              />
+            ) : null}
+            <Button
+              label={
+                step === 3
+                  ? isRTL
+                    ? 'حفظ والمتابعة'
+                    : 'Complete Setup'
+                  : isRTL
+                    ? 'متابعة'
+                    : 'Continue'
+              }
+              variant="primary"
+              fullWidth={false}
+              loading={submitting}
+              style={styles.navBtn}
+              onPress={handleNext}
+            />
           </View>
-        </View>
+        </Card>
       )}
-    </ScrollView>
-  </KeyboardAvoidingView>
-</SafeAreaView>
+
+      {/* Pre-Access Permission ModalSheet for Camera & Files */}
+      <ModalSheet
+        visible={permissionPrompt !== null}
+        onClose={() => setPermissionPrompt(null)}
+        title={
+          permissionPrompt === 'camera'
+            ? isRTL
+              ? 'إذن الوصول إلى الكاميرا'
+              : 'Allow Camera Access'
+            : isRTL
+              ? 'إذن الوصول إلى الملفات'
+              : 'Allow Files Access'
+        }
+      >
+        <AppText variant="bodySmall" tone="secondary">
+          {permissionPrompt === 'camera'
+            ? isRTL
+              ? 'يحتاج ميزان إلى الكاميرا لتصوير الرخصة التجارية واستخراج البيانات تلقائياً.'
+              : 'Mizan needs access to your camera to capture your UAE Trade License for OCR extraction.'
+            : isRTL
+              ? 'يحتاج ميزان إلى الوصول لملفاتك لاختيار الرخصة التجارية بصيغة PDF أو صورة.'
+              : 'Mizan needs access to your device files to select your Trade License PDF or image.'}
+        </AppText>
+        <Button
+          label={
+            permissionPrompt === 'camera'
+              ? isRTL
+                ? 'السماح وفتح الكاميرا'
+                : 'Allow & Open Camera'
+              : isRTL
+                ? 'السماح واختيار ملف'
+                : 'Allow & Choose File'
+          }
+          variant="primary"
+          onPress={permissionPrompt === 'camera' ? handleCameraScan : handleDocumentUpload}
+        />
+        {settingsRequired ? (
+          <Button
+            label={isRTL ? 'فتح إعدادات الجهاز' : 'Open Device Settings'}
+            variant="outline"
+            onPress={() => Linking.openSettings()}
+          />
+        ) : null}
+        <Button
+          label={isRTL ? 'إلغاء' : 'Cancel'}
+          variant="ghost"
+          onPress={() => setPermissionPrompt(null)}
+        />
+      </ModalSheet>
+    </Screen>
   );
 }
 
-// Dynamic theme-aware stylesheet factory for BusinessOnboardingScreen
-const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.neutral.canvas,
-  },
-  keyboardView: {
-    flex: 1,
-  },
+const styles = StyleSheet.create({
   scrollContent: {
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.section,
+    paddingTop: spacing.sm,
+    gap: spacing.md,
   },
   topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.md,
   },
-  brandRow: {
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  brandLogoBox: {
-    width: 32,
-    height: 32,
-    backgroundColor: colors.brand.primary,
-    borderRadius: radii.sm,
+  topActions: {
     flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 3,
-  },
-  logoSlantBar1: {
-    width: 4,
-    height: 16,
-    backgroundColor: colors.neutral.onPrimary,
-    borderRadius: 2,
-    transform: [{ skewX: '-15deg' }],
-  },
-  logoSlantBar2: {
-    width: 4,
-    height: 16,
-    backgroundColor: colors.neutral.onPrimary,
-    borderRadius: 2,
-    transform: [{ skewX: '-15deg' }],
-  },
-  brandTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  langPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.neutral.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radii.full,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    gap: 6,
-  },
-  langText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-  },
-  headerBlock: {
-    marginTop: spacing.sm,
-    marginBottom: spacing.lg,
-  },
-  badgeRow: {
-    marginBottom: spacing.xs,
-  },
-  requiredBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: colors.brand.primaryMuted,
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: 4,
-    borderRadius: radii.full,
-    borderWidth: 1,
-    borderColor: colors.brand.blushAlt,
-    gap: 6,
-  },
-  requiredBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.brand.primaryDark,
-  },
-  pageTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-    marginTop: spacing.xs,
-  },
-  pageSubtitle: {
-    fontSize: 13,
-    color: colors.neutral.textSecondary,
-    lineHeight: 18,
-    marginTop: 4,
-  },
-  stepsIndicatorRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.lg,
-    backgroundColor: colors.neutral.surface,
-    padding: spacing.md,
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-  },
-  stepTrackItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  stepCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: colors.neutral.canvas,
-    borderWidth: 1.5,
-    borderColor: colors.neutral.borderStrong,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  stepCircleActive: {
-    backgroundColor: colors.brand.primary,
-    borderColor: colors.brand.primary,
-  },
-  stepCircleDone: {
-    backgroundColor: colors.semantic.success,
-    borderColor: colors.semantic.success,
-  },
-  stepNumberText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.neutral.textSecondary,
-  },
-  stepNumberTextActive: {
-    color: colors.neutral.onPrimary,
-  },
-  stepLabelText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.neutral.textTertiary,
-  },
-  stepLabelTextActive: {
-    color: colors.brand.primary,
-    fontWeight: '700',
-  },
-  errorBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.semantic.riskBg,
-    borderColor: colors.semantic.riskBorder,
-    borderWidth: 1,
-    borderRadius: radii.md,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-    gap: spacing.sm,
-  },
-  errorBannerText: {
-    flex: 1,
-    fontSize: 13,
-    color: colors.semantic.risk,
-    fontWeight: '500',
-  },
-  card: {
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.xl,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    marginBottom: spacing.lg,
-    ...shadows.sm,
-  },
-  cardSectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    marginBottom: spacing.md,
-  },
-  fieldGroup: {
-    marginBottom: spacing.md,
-  },
-  label: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.neutral.textPrimary,
-    marginBottom: 6,
-  },
-  inputContainer: {
-    alignItems: 'center',
-    backgroundColor: colors.neutral.canvas,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    borderRadius: radii.md,
-    paddingHorizontal: spacing.md,
-    height: 48,
-    gap: spacing.sm,
-  },
-  inputContainerError: {
-    borderColor: colors.semantic.risk,
-    backgroundColor: colors.semantic.riskBg,
-    borderWidth: 1.5,
-  },
-  inlineErrorText: {
-    fontSize: 12,
-    color: colors.semantic.risk,
-    marginTop: 4,
-    fontWeight: '500',
-  },
-  input: {
-    flex: 1,
-    fontSize: 14,
-    color: colors.neutral.textPrimary,
-  },
-  optionsWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  selectablePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.neutral.canvas,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radii.md,
-    gap: 6,
-  },
-  selectablePillSmall: {
-    backgroundColor: colors.neutral.canvas,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm - 2,
-    borderRadius: radii.md,
-  },
-  selectablePillActive: {
-    backgroundColor: colors.brand.primaryMuted,
-    borderColor: colors.brand.primary,
-  },
-  selectablePillText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.neutral.textSecondary,
-  },
-  selectablePillTextActive: {
-    color: colors.brand.primaryDark,
-    fontWeight: '700',
-  },
-  activityPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.neutral.canvas,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    paddingHorizontal: spacing.sm + 4,
-    paddingVertical: 6,
-    borderRadius: radii.full,
-    gap: 6,
-  },
-  activityPillActive: {
-    backgroundColor: colors.brand.primaryMuted,
-    borderColor: colors.brand.primary,
-  },
-  activityPillText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.neutral.textSecondary,
-  },
-  activityPillTextActive: {
-    color: colors.brand.primaryDark,
-    fontWeight: '700',
-  },
-  taxPostureBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: radii.md,
-    padding: spacing.md,
-    marginTop: spacing.sm,
-  },
-  taxPostureTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  taxPostureDesc: {
-    fontSize: 11,
-    color: colors.neutral.textSecondary,
-    lineHeight: 16,
-  },
-  toggleRow: {
-    marginVertical: spacing.xs,
-  },
-  checkboxRow: {
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  checkboxLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.neutral.textPrimary,
-    flex: 1,
-  },
-  actionButtonsRow: {
-    gap: spacing.md,
-    marginTop: spacing.sm,
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.neutral.surface,
-    borderWidth: 1,
-    borderColor: colors.neutral.borderStrong,
-    borderRadius: radii.md,
-    paddingHorizontal: spacing.lg,
-    height: 48,
     gap: spacing.xs,
   },
-  backButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
+  pillBtn: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs + 2,
+    borderRadius: radii.pill,
+    borderWidth: borders.hairline,
   },
-  primaryButton: {
+  header: {
+    gap: spacing.xxs,
+  },
+  modeBar: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.brand.primary,
+    padding: 4,
     borderRadius: radii.md,
-    height: 48,
-    gap: spacing.sm,
-    ...shadows.sm,
-  },
-  primaryButtonText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.neutral.onPrimary,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  // Method selection styles (3 onboarding choices)
-  methodCardsContainer: {
-    gap: spacing.md,
-    marginTop: spacing.sm,
-  },
-  methodCard: {
-    backgroundColor: colors.neutral.surface,
-    borderWidth: 1.5,
-    borderColor: colors.neutral.border,
-    borderRadius: radii.xl,
-    padding: spacing.lg,
-    ...shadows.sm,
-  },
-  methodCardRecommended: {
-    borderColor: colors.brand.primary,
-    backgroundColor: colors.brand.blushSoft,
-  },
-  methodCardTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
-  },
-  methodIconCircle: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: colors.neutral.surfaceInset,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  methodIconCirclePrimary: {
-    backgroundColor: colors.semantic.warningBg,
-  },
-  methodBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    backgroundColor: colors.neutral.surfaceInset,
-  },
-  methodBadgePrimary: {
-    backgroundColor: colors.semantic.warningBg,
-  },
-  methodBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.neutral.textSecondary,
-  },
-  methodBadgeTextPrimary: {
-    color: colors.semantic.warningText,
-  },
-  methodTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    marginBottom: 4,
-  },
-  methodDesc: {
-    fontSize: 13,
-    color: colors.neutral.textSecondary,
-    lineHeight: 18,
-    marginBottom: spacing.sm,
-  },
-  methodActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    borderWidth: borders.hairline,
     gap: 4,
-    marginTop: 4,
   },
-  methodActionText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.brand.primary,
-  },
-  backToMethodsBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: colors.brand.primaryMuted,
-    borderRadius: radii.md,
-    marginBottom: spacing.md,
-    alignSelf: 'flex-start',
-    borderWidth: 1,
-    borderColor: colors.brand.blushAlt,
-  },
-  backToMethodsText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.brand.primary,
-  },
-  ocrSuccessBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: colors.semantic.successBg,
-    borderWidth: 1,
-    borderColor: colors.semantic.successBorder,
-    borderRadius: radii.md,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-  },
-  ocrSuccessBannerText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.semantic.successText,
+  modeTab: {
     flex: 1,
-  },
-  ocrLoadingCard: {
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.xl,
-    padding: spacing.xl,
     alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: spacing.xl,
-    borderWidth: 1.5,
-    borderColor: colors.brand.primary,
-    ...shadows.card,
+    paddingVertical: spacing.xs,
+    borderRadius: radii.sm,
   },
-  ocrLoadingTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    marginTop: spacing.md,
-    textAlign: 'center',
+  errorBox: {
+    borderWidth: borders.hairline,
+    borderRadius: radii.sm,
+    padding: spacing.sm,
   },
-  ocrLoadingSubtext: {
-    fontSize: 13,
-    color: colors.neutral.textSecondary,
-    textAlign: 'center',
-    marginTop: 6,
-    lineHeight: 18,
-  },
-  complianceNoticeBox: {
-    flexDirection: 'row',
+  ocrCard: {
     alignItems: 'center',
     gap: spacing.sm,
-    backgroundColor: colors.neutral.surfaceSubdued,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    borderRadius: radii.md,
-    padding: spacing.md,
-    marginTop: spacing.lg,
+    paddingVertical: spacing.xl,
   },
-  complianceNoticeText: {
-    fontSize: 12,
-    color: colors.neutral.textSecondary,
+  ocrBadge: {
+    width: 48,
+    height: 48,
+    borderRadius: radii.md,
+    borderWidth: borders.hairline,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  centeredText: {
+    textAlign: 'center',
+  },
+  wizardCard: {
+    gap: spacing.md,
+  },
+  stepBarRow: {
+    flexDirection: 'row',
+    gap: spacing.xxs + 2,
+  },
+  stepSegment: {
     flex: 1,
-    lineHeight: 16,
+    height: 3,
+    borderRadius: radii.pill,
+  },
+  stepFields: {
+    gap: spacing.sm,
+  },
+  chipLabel: {
+    marginBottom: spacing.xs,
+  },
+  chipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  chip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs + 2,
+    borderRadius: radii.pill,
+    borderWidth: borders.hairline,
+  },
+  rowTwoCol: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  col: {
+    flex: 1,
+  },
+  sbrBanner: {
+    borderWidth: borders.hairline,
+    borderRadius: radii.sm,
+    padding: spacing.sm,
+  },
+  navRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.xxs,
+  },
+  navBtn: {
+    flex: 1,
   },
 });

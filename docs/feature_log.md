@@ -1,5 +1,7 @@
 # Mizan (ميزان) - Feature Dependency Graph & Architecture Log
 
+> **UI Overhaul Status (2026-11-14):** Mobile UI screens and visual components were reset to a clean shell for screen-by-screen rebuild (archived on `archive/pre-ui-overhaul`). Backend modules remain intact.
+
 ```mermaid
 graph TD
     subgraph Identity & Tenant Layer

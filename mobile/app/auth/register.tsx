@@ -1,620 +1,407 @@
 // ============================================================================
-// Mizan (ميزان) - Production Register Screen
-// Creates new User, Organisation, and Admin Membership with UAE tax grounding
+// Mizan (ميزان) - Register Screen (Screen 2)
+// Monochrome institutional account creation: Full Name, Work Email, optional
+// UAE Phone & Company, Password with monochrome strength bar, and Google OAuth.
 // ============================================================================
 
-import React, { useState, useEffect } from 'react';
-import {
-  StyleSheet,
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  ActivityIndicator,
-} from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from '../../src/components/SafeAreaView';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
-import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
-import { useLocale } from '../../src/context/LocaleContext';
-import { useBusiness } from '../../src/context/BusinessContext';
 import { MizanApi } from '../../src/services/api';
-import {
-  configureGoogleSignIn,
-  performGoogleSignIn,
-} from '../../src/services/googleAuth';
-import { AppPreferences } from '../../src/utils/preferences';
+import { isGoogleSignInSupported, performGoogleSignIn } from '../../src/services/googleAuth';
+import { useTheme } from '../../src/context/ThemeContext';
+import { useLocale } from '../../src/context/LocaleContext';
+import { borders, radii, spacing } from '../../src/theme/tokens';
+import { AppText, Button, Card, Screen, TextField } from '../../src/ui';
 
+/**
+ * Evaluates password strength on a 1..3 scale for the monochrome indicator.
+ */
+function getPasswordStrength(value: string): 0 | 1 | 2 | 3 {
+  if (!value) return 0;
+  let score = 0;
+  if (value.length >= 8) score += 1;
+  if (/[A-Z]/.test(value) && /[a-z]/.test(value)) score += 1;
+  if (/[0-9]/.test(value) || /[^A-Za-z0-9]/.test(value)) score += 1;
+  return score as 0 | 1 | 2 | 3;
+}
+
+/**
+ * Translates common Firebase Auth error codes into user-friendly EN/AR copy.
+ */
+function formatAuthError(err: any, isRTL: boolean): string {
+  const code = err?.code || '';
+  if (code === 'auth/email-already-in-use') {
+    return isRTL
+      ? 'هذا البريد الإلكتروني مسجل بالفعل. يمكنك تسجيل الدخول.'
+      : 'This email is already registered. Try signing in instead.';
+  }
+  if (code === 'auth/weak-password') {
+    return isRTL
+      ? 'كلمة المرور ضعيفة جداً. استخدم 8 أحرف على الأقل.'
+      : 'Password is too weak. Use at least 8 characters.';
+  }
+  return (
+    err?.message ||
+    (isRTL ? 'تعذر إنشاء الحساب. يرجى المحاولة مرة أخرى.' : 'Registration failed. Please try again.')
+  );
+}
+
+/**
+ * Monochrome Create Account screen supporting EN/AR RTL and Light/Dark modes.
+ */
 export default function RegisterScreen() {
   const router = useRouter();
-  const { locale, toggleLocale, isRTL } = useLocale();
-  const { colors, isDark } = useTheme();
-  const styles = useThemedStyles(createStyles);
-  const { refreshBusinesses } = useBusiness();
+  const { colors } = useTheme();
+  const { isRTL, toggleLocale } = useLocale();
 
   const [fullName, setFullName] = useState('');
-  const [organisationName, setOrganisationName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [organisationName, setOrganisationName] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  // Safely configure native Google Sign-in only when RNGoogleSignin is linked (skips Expo Go cleanly)
-  useEffect(() => {
-    configureGoogleSignIn();
-  }, []);
+  const googleSupported = isGoogleSignInSupported();
+  const strength = useMemo(() => getPasswordStrength(password), [password]);
 
-  const getFirebaseAuthErrorMessage = (code: string, isRTL: boolean): string => {
-    switch (code) {
-      case 'auth/email-already-in-use':
-        return isRTL ? 'البريد الإلكتروني مسجل بالفعل. يرجى تسجيل الدخول.' : 'This email address is already in use. Please sign in.';
-      case 'auth/weak-password':
-        return isRTL ? 'كلمة المرور ضعيفة جداً (يجب ألا تقل عن 8 أحرف).' : 'Password is too weak. Please use at least 8 characters.';
-      case 'auth/invalid-email':
-        return isRTL ? 'صيغة البريد الإلكتروني غير صالحة.' : 'The email address is badly formatted.';
-      case 'auth/network-request-failed':
-        return isRTL ? 'فشل الاتصال بالإنترنت. يرجى التحقق من الشبكة.' : 'Network connection error. Please verify your connection.';
-      default:
-        return '';
-    }
-  };
+  const strengthLabel = useMemo(() => {
+    if (strength === 0) return '';
+    if (strength === 1) return isRTL ? 'ضعيفة' : 'Weak';
+    if (strength === 2) return isRTL ? 'متوسطة' : 'Fair';
+    return isRTL ? 'قوية' : 'Strong';
+  }, [strength, isRTL]);
 
+  /** Handles email/password registration via Firebase + NestJS backend sync */
   const handleRegister = async () => {
-    if (!fullName.trim()) {
-      setErrorMessage(isRTL ? 'يرجى إدخال الاسم الكامل' : 'Please enter your full name');
+    setFormError(null);
+    const trimmedName = fullName.trim();
+    const trimmedEmail = email.trim();
+
+    if (trimmedName.length < 2) {
+      setFormError(isRTL ? 'يرجى إدخال الاسم الكامل.' : 'Please enter your full name.');
       return;
     }
-    if (!email.trim() || !email.includes('@')) {
-      setErrorMessage(isRTL ? 'يرجى إدخال بريد إلكتروني صالح' : 'Please enter a valid email address');
+    if (!trimmedEmail || !trimmedEmail.includes('@')) {
+      setFormError(isRTL ? 'يرجى إدخال بريد إلكتروني صحيح.' : 'Please enter a valid work email.');
       return;
     }
-    if (!password || password.length < 8) {
-      setErrorMessage(
+    if (password.length < 8) {
+      setFormError(
         isRTL
-          ? 'يجب ألا تقل كلمة المرور عن 8 أحرف'
-          : 'Password must be at least 8 characters long'
+          ? 'كلمة المرور يجب أن تكون 8 أحرف على الأقل.'
+          : 'Password must be at least 8 characters.'
       );
       return;
     }
+    if (password !== confirmPassword) {
+      setFormError(isRTL ? 'كلمتا المرور غير متطابقتين.' : 'Passwords do not match.');
+      return;
+    }
 
+    setLoading(true);
     try {
-      setIsLoading(true);
-      setErrorMessage(null);
-
       await MizanApi.register({
-        fullName: fullName.trim(),
-        organisationName: organisationName.trim() || undefined,
-        email: email.trim(),
-        phone: phone.trim() || undefined,
+        fullName: trimmedName,
+        email: trimmedEmail,
         password,
+        ...(phone.trim() ? { phone: phone.trim() } : {}),
+        ...(organisationName.trim() ? { organisationName: organisationName.trim() } : {}),
       });
-
-      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
-      await refreshBusinesses();
-      // Mandatory onboarding: user must configure their actual business before entering
       router.replace('/onboarding/business');
     } catch (err: any) {
-      AppPreferences.notification(Haptics.NotificationFeedbackType.Error);
-      const friendlyMsg = getFirebaseAuthErrorMessage(err?.code || '', isRTL);
-      setErrorMessage(
-        friendlyMsg ||
-          err?.message ||
-          (isRTL
-            ? 'فشل إنشاء الحساب. يرجى المحاولة مرة أخرى.'
-            : 'Registration failed. Please check your details.')
-      );
+      setFormError(formatAuthError(err, isRTL));
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
-  /**
-   * Initiates 1-Tap Google Sign-in flow and moves to mandatory business onboarding
-   */
-  const handleGoogleSignIn = async () => {
+  /** Handles 1-Tap Google Sign-Up and routes based on existing business state */
+  const handleGoogleSignUp = async () => {
+    setFormError(null);
+    setGoogleLoading(true);
     try {
-      setIsGoogleLoading(true);
-      setErrorMessage(null);
-
-      // Delegate native module guard, Google flow, and Firebase credential swap to shared helper
       const outcome = await performGoogleSignIn(isRTL);
-      if (outcome.status === 'cancelled') {
-        return;
-      }
-      if (outcome.status === 'unavailable' || outcome.status === 'error') {
-        setErrorMessage(outcome.message);
-        AppPreferences.notification(Haptics.NotificationFeedbackType.Error);
-        return;
-      }
-
-      AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
-      await refreshBusinesses();
-      const existing = await MizanApi.getBusinesses().catch(() => []);
-      if (existing && existing.length > 0) {
-        router.replace('/(tabs)');
-      } else {
+      if (outcome.status === 'success') {
+        try {
+          const businesses = await MizanApi.getBusinesses();
+          if (Array.isArray(businesses) && businesses.length > 0) {
+            router.replace('/(tabs)');
+            return;
+          }
+        } catch {
+          // Fall through to onboarding if business check fails
+        }
         router.replace('/onboarding/business');
+      } else if (outcome.status === 'error' || outcome.status === 'unavailable') {
+        setFormError(outcome.message);
       }
     } finally {
-      setIsGoogleLoading(false);
+      setGoogleLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.keyboardView}
-      >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
+    <Screen scroll keyboardAvoiding contentContainerStyle={styles.scrollContent}>
+      {/* Top Bar: Back & Language Toggle */}
+      <View style={styles.topBar}>
+        <Pressable
+          onPress={() => router.back()}
+          style={[
+            styles.pillBtn,
+            {
+              backgroundColor: colors.neutral.surface,
+              borderColor: colors.neutral.border,
+            },
+          ]}
         >
-          {/* Top Bar with Language Switcher */}
-          <View style={[styles.topBar, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-            <View style={[styles.brandRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-              <View style={styles.brandLogoBox}>
-                <View style={styles.logoSlantBar1} />
-                <View style={styles.logoSlantBar2} />
-              </View>
-              <Text style={styles.brandTitle}>Mizan ميزان</Text>
-            </View>
+          <AppText variant="caption" weight="semiBold">
+            {isRTL ? '→ رجوع' : '← Back'}
+          </AppText>
+        </Pressable>
 
-            <TouchableOpacity
-              style={styles.langBtn}
-              onPress={toggleLocale}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="language-outline" size={16} color={colors.neutral.textPrimary} />
-              <Text style={styles.langBtnText}>
-                {locale === 'en' ? 'العربية' : 'English'}
-              </Text>
-            </TouchableOpacity>
+        <Pressable
+          onPress={toggleLocale}
+          style={[
+            styles.pillBtn,
+            styles.langPill,
+            {
+              backgroundColor: colors.neutral.surface,
+              borderColor: colors.neutral.border,
+            },
+          ]}
+        >
+          <AppText variant="caption" weight="semiBold">
+            {isRTL ? 'EN' : 'العربية'}
+          </AppText>
+        </Pressable>
+      </View>
+
+      {/* Heading */}
+      <View style={styles.header}>
+        <AppText variant="h1">
+          {isRTL ? 'إنشاء حسابك' : 'Create your account'}
+        </AppText>
+        <AppText variant="body" tone="secondary">
+          {isRTL
+            ? 'ابدأ مساحة عمل ضريبة الشركات وضريبة القيمة المضافة'
+            : 'Start your UAE Corporate Tax & VAT workspace'}
+        </AppText>
+      </View>
+
+      {/* Registration Form Card */}
+      <Card style={styles.card}>
+        <TextField
+          label={isRTL ? 'الاسم الكامل' : 'Full Name'}
+          placeholder={isRTL ? 'طارق المكتوم' : 'Tariq Al Maktoum'}
+          value={fullName}
+          onChangeText={setFullName}
+          autoComplete="name"
+        />
+
+        <TextField
+          label={isRTL ? 'البريد الإلكتروني للعمل' : 'Work Email'}
+          placeholder="founder@company.ae"
+          value={email}
+          onChangeText={setEmail}
+          autoCapitalize="none"
+          keyboardType="email-address"
+          autoComplete="email"
+        />
+
+        {/* Optional Phone & Company Side-by-Side */}
+        <View style={styles.rowTwoCol}>
+          <View style={styles.col}>
+            <TextField
+              label={isRTL ? 'الهاتف (اختياري)' : 'UAE Phone (Opt.)'}
+              placeholder="+971 50 123 4567"
+              value={phone}
+              onChangeText={setPhone}
+              mono
+              keyboardType="phone-pad"
+            />
           </View>
-
-          {/* Heading */}
-          <View style={[styles.headerSection, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
-            <Text style={[styles.heading, { textAlign: isRTL ? 'right' : 'left' }]}>
-              {isRTL ? 'إنشاء حساب جديد' : 'Create an account'}
-            </Text>
-            <Text style={[styles.subheading, { textAlign: isRTL ? 'right' : 'left' }]}>
-              {isRTL
-                ? 'ابدأ إدارة الضرائب والامتثال لشركتك في دولة الإمارات بكل ثقة.'
-                : 'Start managing your UAE tax obligations and compliance with confidence.'}
-            </Text>
+          <View style={styles.col}>
+            <TextField
+              label={isRTL ? 'الشركة (اختياري)' : 'Company (Opt.)'}
+              placeholder="Al Noor LLC"
+              value={organisationName}
+              onChangeText={setOrganisationName}
+            />
           </View>
+        </View>
 
-          {/* Error Banner */}
-          {errorMessage && (
-            <View style={[styles.errorBanner, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-              <Ionicons name="alert-circle" size={20} color={colors.semantic.risk} />
-              <Text style={[styles.errorText, { textAlign: isRTL ? 'right' : 'left' }]}>
-                {errorMessage}
-              </Text>
+        <View>
+          <TextField
+            label={isRTL ? 'كلمة المرور' : 'Password'}
+            placeholder="••••••••"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry={!showPassword}
+            autoCapitalize="none"
+            rightSlot={
+              <Pressable onPress={() => setShowPassword((prev) => !prev)}>
+                <AppText variant="caption" weight="semiBold" tone="secondary">
+                  {showPassword ? (isRTL ? 'إخفاء' : 'Hide') : isRTL ? 'إظهار' : 'Show'}
+                </AppText>
+              </Pressable>
+            }
+          />
+          {password.length > 0 ? (
+            <View style={styles.strengthRow}>
+              {[1, 2, 3].map((step) => (
+                <View
+                  key={step}
+                  style={[
+                    styles.strengthBar,
+                    {
+                      backgroundColor:
+                        strength >= step ? colors.brand.primary : colors.neutral.border,
+                    },
+                  ]}
+                />
+              ))}
+              <AppText variant="caption" tone="secondary" style={styles.strengthLabel}>
+                {strengthLabel}
+              </AppText>
             </View>
-          )}
+          ) : null}
+        </View>
 
-          {/* Registration Form Card */}
-          <View style={styles.formCard}>
-            {/* Full Name */}
-            <View style={styles.inputGroup}>
-              <Text style={[styles.inputLabel, { textAlign: isRTL ? 'right' : 'left' }]}>
-                {isRTL ? 'الاسم الكامل *' : 'Full Name *'}
-              </Text>
-              <View style={[styles.inputWrapper, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                <Ionicons
-                  name="person-outline"
-                  size={18}
-                  color={colors.neutral.textTertiary}
-                  style={isRTL ? { marginLeft: 10 } : { marginRight: 10 }}
-                />
-                <TextInput
-                  style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
-                  placeholder={isRTL ? 'أحمد المنصوري' : 'Ahmed Al Mansoori'}
-                  placeholderTextColor={colors.neutral.textTertiary}
-                  keyboardAppearance={isDark ? 'dark' : 'light'}
-                  value={fullName}
-                  onChangeText={(val) => {
-                    setFullName(val);
-                    setErrorMessage(null);
-                  }}
-                  autoCorrect={false}
-                />
-              </View>
-            </View>
+        <TextField
+          label={isRTL ? 'تأكيد كلمة المرور' : 'Confirm Password'}
+          placeholder="••••••••"
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+          secureTextEntry={!showPassword}
+          autoCapitalize="none"
+          error={
+            confirmPassword.length > 0 && confirmPassword !== password
+              ? isRTL
+                ? 'كلمتا المرور غير متطابقتين'
+                : 'Passwords do not match'
+              : undefined
+          }
+        />
 
-            {/* Company / Business Name */}
-            <View style={styles.inputGroup}>
-              <Text style={[styles.inputLabel, { textAlign: isRTL ? 'right' : 'left' }]}>
-                {isRTL ? 'اسم الشركة أو المؤسسة' : 'Company or Business Name'}
-              </Text>
-              <View style={[styles.inputWrapper, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                <Ionicons
-                  name="business-outline"
-                  size={18}
-                  color={colors.neutral.textTertiary}
-                  style={isRTL ? { marginLeft: 10 } : { marginRight: 10 }}
-                />
-                <TextInput
-                  style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
-                  placeholder={isRTL ? 'المنصوري لتجارة المواد ش.ذ.م.م' : 'Al Mansoori Trading LLC'}
-                  placeholderTextColor={colors.neutral.textTertiary}
-                  keyboardAppearance={isDark ? 'dark' : 'light'}
-                  value={organisationName}
-                  onChangeText={(val) => setOrganisationName(val)}
-                  autoCorrect={false}
-                />
-              </View>
-            </View>
-
-            {/* Email Address */}
-            <View style={styles.inputGroup}>
-              <Text style={[styles.inputLabel, { textAlign: isRTL ? 'right' : 'left' }]}>
-                {isRTL ? 'البريد الإلكتروني للعمل *' : 'Work Email *'}
-              </Text>
-              <View style={[styles.inputWrapper, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                <Ionicons
-                  name="mail-outline"
-                  size={18}
-                  color={colors.neutral.textTertiary}
-                  style={isRTL ? { marginLeft: 10 } : { marginRight: 10 }}
-                />
-                <TextInput
-                  style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
-                  placeholder="founder@company.ae"
-                  placeholderTextColor={colors.neutral.textTertiary}
-                  keyboardAppearance={isDark ? 'dark' : 'light'}
-                  value={email}
-                  onChangeText={(val) => {
-                    setEmail(val);
-                    setErrorMessage(null);
-                  }}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                  autoCorrect={false}
-                />
-              </View>
-            </View>
-
-            {/* UAE Mobile Phone */}
-            <View style={styles.inputGroup}>
-              <Text style={[styles.inputLabel, { textAlign: isRTL ? 'right' : 'left' }]}>
-                {isRTL ? 'رقم الهاتف (اختياري)' : 'UAE Mobile Number (Optional)'}
-              </Text>
-              <View style={[styles.inputWrapper, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                <Ionicons
-                  name="call-outline"
-                  size={18}
-                  color={colors.neutral.textTertiary}
-                  style={isRTL ? { marginLeft: 10 } : { marginRight: 10 }}
-                />
-                <TextInput
-                  style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
-                  placeholder="+971 50 123 4567"
-                  placeholderTextColor={colors.neutral.textTertiary}
-                  keyboardAppearance={isDark ? 'dark' : 'light'}
-                  value={phone}
-                  onChangeText={(val) => setPhone(val)}
-                  keyboardType="phone-pad"
-                />
-              </View>
-            </View>
-
-            {/* Password */}
-            <View style={styles.inputGroup}>
-              <Text style={[styles.inputLabel, { textAlign: isRTL ? 'right' : 'left' }]}>
-                {isRTL ? 'كلمة المرور (8 أحرف على الأقل) *' : 'Password (8+ characters) *'}
-              </Text>
-              <View style={[styles.inputWrapper, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                <Ionicons
-                  name="lock-closed-outline"
-                  size={18}
-                  color={colors.neutral.textTertiary}
-                  style={isRTL ? { marginLeft: 10 } : { marginRight: 10 }}
-                />
-                <TextInput
-                  style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]}
-                  placeholder="••••••••"
-                  placeholderTextColor={colors.neutral.textTertiary}
-                  keyboardAppearance={isDark ? 'dark' : 'light'}
-                  value={password}
-                  onChangeText={(val) => {
-                    setPassword(val);
-                    setErrorMessage(null);
-                  }}
-                  secureTextEntry={!showPassword}
-                  autoCapitalize="none"
-                />
-                <TouchableOpacity
-                  onPress={() => setShowPassword(!showPassword)}
-                  activeOpacity={0.7}
-                  style={styles.eyeBtn}
-                >
-                  <Ionicons
-                    name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                    size={18}
-                    color={colors.neutral.textTertiary}
-                  />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Create Account Button */}
-            <TouchableOpacity
-              style={[styles.primaryButton, isLoading && styles.buttonDisabled]}
-              onPress={handleRegister}
-              disabled={isLoading || isGoogleLoading}
-              activeOpacity={0.85}
-            >
-              {isLoading ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
-              ) : (
-                <Text style={styles.primaryButtonText}>
-                  {isRTL ? 'إنشاء الحساب' : 'Create Account'}
-                </Text>
-              )}
-            </TouchableOpacity>
-
-            {/* Social Login Divider */}
-            <View style={styles.dividerRow}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>{isRTL ? 'أو' : 'OR'}</Text>
-              <View style={styles.dividerLine} />
-            </View>
-
-            {/* 1-Tap Google Sign-In Button */}
-            <TouchableOpacity
-              style={[styles.googleButton, isGoogleLoading && styles.buttonDisabled]}
-              onPress={handleGoogleSignIn}
-              disabled={isLoading || isGoogleLoading}
-              activeOpacity={0.85}
-            >
-              {isGoogleLoading ? (
-                <ActivityIndicator color={colors.neutral.textPrimary} size="small" />
-              ) : (
-                <View style={[styles.googleButtonContent, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                  <Ionicons name="logo-google" size={18} color="#EA4335" style={{ marginHorizontal: 8 }} />
-                  <Text style={styles.googleButtonText}>
-                    {isRTL ? 'المتابعة باستخدام Google' : 'Continue with Google'}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
+        {formError ? (
+          <View
+            style={[
+              styles.errorBox,
+              {
+                backgroundColor: colors.neutral.surfaceSubtle,
+                borderColor: colors.neutral.borderStrong,
+              },
+            ]}
+          >
+            <AppText variant="bodySmall" weight="semiBold">
+              ! {formError}
+            </AppText>
           </View>
+        ) : null}
 
-          {/* Switch to Login */}
-          <View style={[styles.footerRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-            <Text style={styles.footerText}>
-              {isRTL ? 'لديك حساب بالفعل؟' : 'Already have an account?'}
-            </Text>
-            <TouchableOpacity
-              onPress={() => router.push('/auth/login')}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.footerLink}>
-                {isRTL ? ' تسجيل الدخول' : ' Sign in'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+        <Button
+          label={isRTL ? 'إنشاء حساب' : 'Create Account'}
+          variant="primary"
+          loading={loading}
+          disabled={googleLoading}
+          onPress={handleRegister}
+          style={styles.submitBtn}
+        />
+      </Card>
+
+      {/* Google Sign-Up Section */}
+      {googleSupported ? (
+        <Button
+          label={isRTL ? 'التسجيل عبر Google' : 'Sign up with Google'}
+          variant="outline"
+          loading={googleLoading}
+          disabled={loading}
+          onPress={handleGoogleSignUp}
+        />
+      ) : null}
+
+      {/* Sign In Footer */}
+      <View style={styles.footerRow}>
+        <AppText variant="bodySmall" tone="secondary">
+          {isRTL ? 'لديك حساب بالفعل؟' : 'Already have an account?'}
+        </AppText>
+        <Pressable onPress={() => router.replace('/auth/login')}>
+          <AppText variant="bodySmall" weight="semiBold" style={styles.underlineLink}>
+            {isRTL ? 'تسجيل الدخول' : 'Sign in'}
+          </AppText>
+        </Pressable>
+      </View>
+    </Screen>
   );
 }
 
-const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) =>
-  StyleSheet.create({
-    safeArea: {
-      flex: 1,
-      backgroundColor: colors.neutral.canvas,
-    },
-    keyboardView: {
-      flex: 1,
-    },
-    scrollContent: {
-      flexGrow: 1,
-      paddingHorizontal: spacing.lg,
-      paddingTop: spacing.md,
-      paddingBottom: spacing.xl,
-      justifyContent: 'center',
-    },
-    topBar: {
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginBottom: spacing.lg,
-    },
-    brandRow: {
-      alignItems: 'center',
-      gap: spacing.sm,
-    },
-    brandLogoBox: {
-      width: 32,
-      height: 32,
-      borderRadius: 9,
-      backgroundColor: colors.brand.primary,
-      alignItems: 'center',
-      justifyContent: 'center',
-      position: 'relative',
-      overflow: 'hidden',
-    },
-    logoSlantBar1: {
-      position: 'absolute',
-      width: 3,
-      height: 18,
-      backgroundColor: colors.neutral.onPrimary,
-      transform: [{ rotate: '25deg' }],
-      left: 11,
-    },
-    logoSlantBar2: {
-      position: 'absolute',
-      width: 3,
-      height: 18,
-      backgroundColor: colors.neutral.onPrimary,
-      transform: [{ rotate: '25deg' }],
-      right: 11,
-    },
-    brandTitle: {
-      fontSize: 18,
-      fontWeight: '800',
-      color: colors.neutral.textPrimary,
-      letterSpacing: -0.3,
-    },
-    langBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      paddingHorizontal: spacing.sm,
-      paddingVertical: 6,
-      borderRadius: radii.full,
-      backgroundColor: colors.neutral.surface,
-      borderWidth: 1,
-      borderColor: colors.neutral.border,
-    },
-    langBtnText: {
-      fontSize: 12,
-      fontWeight: '600',
-      color: colors.neutral.textPrimary,
-    },
-    headerSection: {
-      marginBottom: spacing.lg,
-    },
-    heading: {
-      fontSize: 26,
-      fontWeight: '800',
-      color: colors.neutral.textPrimary,
-      letterSpacing: -0.5,
-      marginBottom: 6,
-    },
-    subheading: {
-      fontSize: 14,
-      color: colors.neutral.textSecondary,
-      lineHeight: 20,
-    },
-    errorBanner: {
-      alignItems: 'center',
-      gap: spacing.sm,
-      backgroundColor: colors.semantic.riskBg,
-      borderColor: colors.semantic.riskBorder,
-      borderWidth: 1,
-      borderRadius: radii.md,
-      padding: spacing.md,
-      marginBottom: spacing.md,
-    },
-    errorText: {
-      flex: 1,
-      fontSize: 13,
-      color: colors.semantic.riskText,
-      fontWeight: '500',
-    },
-    formCard: {
-      backgroundColor: colors.neutral.surface,
-      borderRadius: radii.lg,
-      padding: spacing.lg,
-      borderWidth: 1,
-      borderColor: colors.neutral.border,
-      ...shadows.card,
-    },
-    inputGroup: {
-      marginBottom: spacing.md,
-    },
-    inputLabel: {
-      fontSize: 13,
-      fontWeight: '600',
-      color: colors.neutral.textPrimary,
-      marginBottom: 6,
-    },
-    inputWrapper: {
-      alignItems: 'center',
-      backgroundColor: colors.neutral.surfaceInset,
-      borderRadius: radii.md,
-      borderWidth: 1,
-      borderColor: colors.neutral.border,
-      paddingHorizontal: spacing.md,
-      height: 48,
-    },
-    input: {
-      flex: 1,
-      fontSize: 15,
-      color: colors.neutral.textPrimary,
-      height: '100%',
-    },
-    eyeBtn: {
-      padding: 6,
-    },
-    primaryButton: {
-      backgroundColor: colors.brand.primary,
-      borderRadius: radii.md,
-      height: 48,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginTop: spacing.sm,
-      ...shadows.sm,
-    },
-    buttonDisabled: {
-      opacity: 0.65,
-    },
-    primaryButtonText: {
-      color: colors.neutral.onPrimary,
-      fontSize: 16,
-      fontWeight: '700',
-    },
-    dividerRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginVertical: spacing.md,
-    },
-    dividerLine: {
-      flex: 1,
-      height: 1,
-      backgroundColor: colors.neutral.border,
-    },
-    dividerText: {
-      paddingHorizontal: spacing.sm,
-      fontSize: 12,
-      fontWeight: '600',
-      color: colors.neutral.textTertiary,
-    },
-    googleButton: {
-      backgroundColor: colors.neutral.surfaceRaised,
-      borderWidth: 1,
-      borderColor: colors.neutral.borderStrong,
-      borderRadius: radii.md,
-      height: 48,
-      alignItems: 'center',
-      justifyContent: 'center',
-      ...shadows.sm,
-    },
-    googleButtonContent: {
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    googleButtonText: {
-      fontSize: 15,
-      fontWeight: '600',
-      color: colors.neutral.textPrimary,
-    },
-    footerRow: {
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginTop: spacing.lg,
-      gap: 4,
-    },
-    footerText: {
-      fontSize: 14,
-      color: colors.neutral.textSecondary,
-    },
-    footerLink: {
-      fontSize: 14,
-      fontWeight: '700',
-      color: colors.brand.primary,
-    },
-  });
+const styles = StyleSheet.create({
+  scrollContent: {
+    paddingTop: spacing.sm,
+    gap: spacing.md,
+  },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  pillBtn: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs + 2,
+    borderRadius: radii.sm,
+    borderWidth: borders.hairline,
+  },
+  langPill: {
+    borderRadius: radii.pill,
+  },
+  header: {
+    gap: spacing.xxs,
+  },
+  card: {
+    gap: spacing.sm,
+  },
+  rowTwoCol: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  col: {
+    flex: 1,
+  },
+  strengthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xxs + 2,
+    marginTop: spacing.xs,
+  },
+  strengthBar: {
+    flex: 1,
+    height: 3,
+    borderRadius: radii.pill,
+  },
+  strengthLabel: {
+    marginLeft: spacing.xxs,
+  },
+  errorBox: {
+    borderWidth: borders.hairline,
+    borderRadius: radii.sm,
+    padding: spacing.sm,
+  },
+  submitBtn: {
+    marginTop: spacing.xxs,
+  },
+  footerRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: spacing.xxs + 2,
+    marginTop: spacing.xxs,
+  },
+  underlineLink: {
+    textDecorationLine: 'underline',
+  },
+});

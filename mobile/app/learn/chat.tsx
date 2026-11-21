@@ -1,1263 +1,515 @@
 // ============================================================================
-// Mizan (ميزان) - Grounded Tax AI Chat & Answer Details Screen
-// Design Reference: screen-designs/4129.png (Screens 1, 2, 3)
-// 3 Views: Landing Hub -> Conversational Thread -> Answer Details Slide-Over
-// Grounded strictly in UAE Federal Decree-Laws & FTA Clarifications
-// Connected to Active Business Entity & Real Statutory Backend
+// Mizan (ميزان) - AI Tax Assistant Chat (Screen 9)
+// Monochrome FTA-grounded statutory Q&A with curated prompt chips, persistent
+// conversation threads, statutory citation pills, and keyboard-avoiding composer.
 // ============================================================================
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  StyleSheet,
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Linking,
-  ActivityIndicator,
-  Share,
-  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View,
 } from 'react-native';
-import { SafeAreaView } from '../../src/components/SafeAreaView';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import { AppPreferences } from '../../src/utils/preferences';
-import { ThemeColors, ThemeShadows, radii, spacing } from '../../src/theme/tokens';
-import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
-import { useLocale } from '../../src/context/LocaleContext';
 import { useBusiness } from '../../src/context/BusinessContext';
+import { useTheme } from '../../src/context/ThemeContext';
+import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
-import Animated, { FadeInUp } from 'react-native-reanimated';
-import { AnimatedTypingIndicator, SmoothModal } from '../../src/animations';
-
-type AIChatView = 'landing' | 'thread';
-type DetailTab = 'Answer' | 'Sources' | 'Related' | 'Citations';
+import { borders, getFont, radii, spacing, typeScale } from '../../src/theme/tokens';
+import { AppText, Badge, Button, ModalSheet } from '../../src/ui';
 
 interface ChatMessage {
   id: string;
-  sender: 'user' | 'assistant';
-  text: string;
-  timestamp: string;
-  sources?: Array<{
-    title: string;
-    sub: string;
-    url?: string;
-  }>;
-  statutoryRationale?: string;
-  actionRequired?: string;
-  emaraTaxImpact?: string;
-  suggestedFollowUps?: string[];
-  isGrounded?: boolean;
-  businessGrounding?: {
-    entityName?: string;
-    entityType?: string;
-    isFreeZone?: boolean;
-    applicableRelief?: string;
-  };
+  role: 'user' | 'assistant';
+  content: string;
+  citations?: string[];
 }
 
-export default function GroundedChatScreen() {
+const FALLBACK_PROMPTS_EN = [
+  { id: 'sbr', prompt: 'Am I eligible for Small Business Relief (0% CT)?', tag: 'CT' },
+  { id: 'ent', prompt: 'How does Art. 32 Entertainment 50% deduction work?', tag: 'CT' },
+  { id: 'vat', prompt: 'What expenses qualify for Input VAT recovery?', tag: 'VAT' },
+];
+
+const FALLBACK_PROMPTS_AR = [
+  { id: 'sbr', prompt: 'هل أنا مؤهل لإعفاء الأعمال الصغيرة (0%)؟', tag: 'CT' },
+  { id: 'ent', prompt: 'كيف تُحتسب مصاريف الضيافة بنسبة 50%؟', tag: 'CT' },
+  { id: 'vat', prompt: 'ما هي المصروفات القابلة لاسترداد ضريبة المدخلات؟', tag: 'VAT' },
+];
+
+/**
+ * Monochrome FTA-grounded AI Tax Assistant Chat screen.
+ */
+export default function AiTaxChatScreen() {
   const router = useRouter();
-  const { isRTL } = useLocale();
+  const { colors } = useTheme();
+  const { locale, isRTL } = useLocale();
   const { activeBusiness } = useBusiness();
-  // Resolve theme palette & dynamic styles for Light/Dark reactivity
-  const { colors, isDark } = useTheme();
-  const styles = useThemedStyles(createStyles);
-  const scrollViewRef = useRef<any>(null);
+  const scrollRef = useRef<any>(null);
 
-  const [viewState, setViewState] = useState<AIChatView>('landing');
+  const [prompts, setPrompts] = useState<{ id: string; prompt: string; tag: string }[]>(
+    isRTL ? FALLBACK_PROMPTS_AR : FALLBACK_PROMPTS_EN
+  );
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
-  const [showAnswerDetails, setShowAnswerDetails] = useState(false);
-  const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>('Answer');
-  const [isTyping, setIsTyping] = useState(false);
-  const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [threadsOpen, setThreadsOpen] = useState(false);
 
-  const [followUpChips, setFollowUpChips] = useState<string[]>([
-    'Is my business eligible for Small Business Relief (AED 3M)?',
-    'Can I claim VAT back on employee hotels & travel under Decision 17?',
-    'What are the Corporate Tax registration deadlines and late penalties?',
-  ]);
+  const inputFont = getFont('regular', isRTL, false);
 
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 'init-1',
-      sender: 'assistant',
-      text:
-        'مرحباً بك في مساعد ميزان الضريبي (Mizan AI).\n\n' +
-        'أنا مساعدك القانوني المعتمد في دولة الإمارات. جميع إجاباتي مستندة حصراً إلى المراسيم بقوانين اتحادية وقرارات مجلس الوزراء والقرارات الوزارية الصادرة عن وزارة المالية والهيئة الاتحادية للضرائب.\n\n' +
-        (activeBusiness
-          ? `المنشأة النشطة الحالية: ${activeBusiness.tradeName || activeBusiness.legalName} (${activeBusiness.jurisdictionType === 'FREE_ZONE' ? 'منطقة حرة' : 'داخل الدولة'})\n\nكيف يمكنني مساعدتك اليوم؟`
-          : 'كيف يمكنني مساعدتك في استفساراتك الضريبية اليوم؟'),
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      sources: [
-        {
-          title: 'Federal Decree-Law No. 47 of 2022',
-          sub: 'Taxation of Corporations and Businesses',
-          url: 'https://tax.gov.ae/en/legislation/corporate.tax.aspx',
-        },
-        {
-          title: 'Federal Decree-Law No. 8 of 2017',
-          sub: 'Value Added Tax Law',
-          url: 'https://tax.gov.ae/en/legislation/vat.aspx',
-        },
-      ],
-      isGrounded: true,
-      statutoryRationale: 'Official UAE Tax Legislative Framework',
-      actionRequired: 'Ask specific questions about Corporate Tax, VAT recovery, or registration obligations.',
-    },
-  ]);
+  const loadInitialData = useCallback(async () => {
+    const lang = locale === 'ar' ? 'ar' : 'en';
+    const [promptsRes, convsRes] = await Promise.allSettled([
+      MizanApi.getAiPrompts(lang),
+      MizanApi.getAiConversations(activeBusiness?.id),
+    ]);
 
-  // Sync quick prompts on mount
+    if (
+      promptsRes.status === 'fulfilled' &&
+      Array.isArray(promptsRes.value) &&
+      promptsRes.value.length > 0
+    ) {
+      setPrompts(promptsRes.value.slice(0, 4));
+    } else {
+      setPrompts(isRTL ? FALLBACK_PROMPTS_AR : FALLBACK_PROMPTS_EN);
+    }
+
+    if (convsRes.status === 'fulfilled' && Array.isArray(convsRes.value)) {
+      setConversations(convsRes.value);
+    }
+  }, [activeBusiness?.id, isRTL, locale]);
+
   useEffect(() => {
-    MizanApi.getAiPrompts(isRTL ? 'ar' : 'en')
-      .then((prompts) => {
-        if (prompts && prompts.length > 0) {
-          setFollowUpChips(prompts.map((p) => p.prompt));
-        }
-      })
-      .catch((err) => {
-        console.warn('Failed to fetch prompt chips:', err?.message || err);
-      });
-  }, [isRTL]);
+    loadInitialData();
+  }, [loadInitialData]);
 
-  const handleSendMessage = async (textToSend?: string) => {
-    AppPreferences.notification(Haptics.NotificationFeedbackType.Warning);
-    Alert.alert(
-      'Mizan AI • Regulatory Preview',
-      'The Mizan AI Statutory Query engine is currently undergoing regulatory compliance verification with UAE tax authorities. Live querying is temporarily locked to guarantee manual-first accounting accuracy.\n\nPlease refer to our official interactive Academy micro-courses and deterministic filing companions.',
-      [{ text: 'Understood' }]
-    );
-  };
-
-  const handleSelectQuickPrompt = (prompt: string) => {
-    handleSendMessage(prompt);
-  };
-
-  const openSourceUrl = (url?: string) => {
-    if (!url) return;
-    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
-    Linking.openURL(url).catch((err) => {
-      console.warn('Failed to open source URL:', err);
-    });
-  };
-
-  const handleOpenAnswerDetails = (msg?: ChatMessage) => {
-    AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
-    const target = msg || selectedMessage || messages.filter((m) => m.sender === 'assistant').slice(-1)[0];
-    if (target) {
-      setSelectedMessage(target);
-      setShowAnswerDetails(true);
+  /** Loads an existing conversation thread */
+  const handleSelectThread = async (convId: string) => {
+    setThreadsOpen(false);
+    setError(null);
+    try {
+      const conv = await MizanApi.getAiConversation(convId);
+      setActiveConvId(convId);
+      const rawMsgs = Array.isArray(conv?.messages) ? conv.messages : [];
+      setMessages(
+        rawMsgs.map((m: any, idx: number) => ({
+          id: m.id || String(idx),
+          role: (m.role || '').toLowerCase() === 'user' ? 'user' : 'assistant',
+          content: m.content || '',
+          citations: Array.isArray(m.citations) ? m.citations : undefined,
+        }))
+      );
+    } catch (err: any) {
+      setError(err?.message || 'Could not load conversation.');
     }
   };
 
-  const activeMsgForDetails =
-    selectedMessage || messages.filter((m) => m.sender === 'assistant').slice(-1)[0];
+  /** Starts a fresh conversation thread */
+  const handleNewThread = () => {
+    setActiveConvId(null);
+    setMessages([]);
+    setError(null);
+    setThreadsOpen(false);
+  };
+
+  /** Sends user message to persistent conversation thread */
+  const handleSend = async (overrideText?: string) => {
+    const text = (overrideText ?? inputText).trim();
+    if (!text || sending) return;
+
+    setError(null);
+    if (!overrideText) setInputText('');
+
+    const optimisticUser: ChatMessage = {
+      id: `u-${Date.now()}`,
+      role: 'user',
+      content: text,
+    };
+    setMessages((prev) => [...prev, optimisticUser]);
+    setSending(true);
+
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
+
+    try {
+      let convId = activeConvId;
+      if (!convId) {
+        const created = await MizanApi.createAiConversation(
+          activeBusiness?.id,
+          text.slice(0, 48)
+        );
+        convId = created?.id;
+        if (convId) {
+          setActiveConvId(convId);
+          setConversations((prev) => [created, ...prev]);
+        }
+      }
+
+      if (!convId) {
+        throw new Error('Could not initialize conversation thread.');
+      }
+
+      const reply = await MizanApi.sendAiConversationMessage(
+        convId,
+        text,
+        activeBusiness?.id,
+        locale === 'ar' ? 'ar' : 'en'
+      );
+
+      const assistantMsg: ChatMessage = {
+        id: reply?.assistantMessage?.id || `a-${Date.now()}`,
+        role: 'assistant',
+        content:
+          reply?.assistantMessage?.content ||
+          reply?.answer ||
+          reply?.content ||
+          'No response returned.',
+        citations:
+          reply?.assistantMessage?.citations ||
+          reply?.citations ||
+          undefined,
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
+    } catch (err: any) {
+      setError(
+        err?.message ||
+          (isRTL
+            ? 'تعذر الاتصال بمساعد الضرائب. يرجى المحاولة مرة أخرى.'
+            : 'Unable to reach Tax Assistant. Please try again.')
+      );
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    <SafeAreaView
+      edges={['top', 'bottom']}
+      style={[styles.safe, { backgroundColor: colors.neutral.canvas }]}
+    >
+      {/* Top Bar */}
+      <View
+        style={[
+          styles.topBar,
+          { backgroundColor: colors.neutral.surface, borderBottomColor: colors.neutral.border },
+        ]}
       >
-        {/* Top Header */}
-        <View style={styles.headerRow}>
-          <View style={styles.headerLeft}>
-            <TouchableOpacity
-              style={styles.backButton}
-              onPress={() => {
-                if (viewState === 'thread') setViewState('landing');
-                else router.back();
-              }}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="arrow-back" size={20} color={colors.neutral.textPrimary} />
-            </TouchableOpacity>
-
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Text style={styles.headerTitle}>
-                  {viewState === 'landing' ? 'Grounded Tax AI' : 'Mizan AI'}
-                </Text>
-                {viewState === 'thread' && (
-                  <View style={styles.groundedTagPill}>
-                    <Text style={styles.groundedTagText}>Grounded</Text>
-                  </View>
-                )}
-              </View>
-
-              {/* Active Business Entity Badge */}
-              {activeBusiness && (
-                <View style={styles.businessContextBadge}>
-                  <Ionicons name="business" size={11} color={colors.brand.primary} />
-                  <Text style={styles.businessContextText} numberOfLines={1}>
-                    {activeBusiness.tradeName || activeBusiness.legalName}
-                  </Text>
-                </View>
-              )}
-            </View>
-          </View>
-
-          <View style={styles.headerRight}>
-            <TouchableOpacity
-              style={styles.headerIconBtn}
-              onPress={() => handleOpenAnswerDetails()}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="information-circle-outline" size={20} color={colors.neutral.textPrimary} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.headerIconBtn}
-              activeOpacity={0.7}
-              onPress={() => {
-                AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
-                setViewState(viewState === 'landing' ? 'thread' : 'landing');
-              }}
-            >
-              <Ionicons
-                name={viewState === 'landing' ? 'chatbubbles-outline' : 'grid-outline'}
-                size={18}
-                color={colors.neutral.textPrimary}
-              />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Regulatory Preview Notice Banner */}
-        <View style={{
-          backgroundColor: colors.brand.primaryMuted,
-          paddingHorizontal: spacing.lg,
-          paddingVertical: 10,
-          borderBottomWidth: 1,
-          borderBottomColor: colors.brand.blushAlt,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 10,
-        }}>
-          <Ionicons name="time" size={18} color={colors.brand.primary} />
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={{ fontSize: 12, fontWeight: '800', color: colors.brand.primaryDark }}>COMING SOON • REGULATORY PREVIEW</Text>
-            </View>
-            <Text style={{ fontSize: 11, color: colors.neutral.textSecondary, marginTop: 1, lineHeight: 15 }}>
-              Real-time FTA query generation is temporarily locked for regulatory review. Manual filing & Academy modules remain fully active.
-            </Text>
-          </View>
-        </View>
-
-        {/* ==================================================================== */}
-        {/* VIEW 1: LANDING TOPICS HUB (4129.png Screen 1)                       */}
-        {/* ==================================================================== */}
-        {viewState === 'landing' && (
-          <ScrollView
-            style={styles.container}
-            contentContainerStyle={styles.contentContainer}
-            showsVerticalScrollIndicator={false}
-          >
-            <View style={styles.titleBanner}>
-              <View style={styles.titleBadgeRow}>
-                <Text style={styles.mainTitle}>Grounded Tax AI Chat</Text>
-                <View style={styles.groundedBadge}>
-                  <Ionicons name="checkmark" size={12} color={colors.semantic.successDark} />
-                  <Text style={styles.groundedBadgeText}>100% Legal Grounding</Text>
-                </View>
-              </View>
-              <Text style={styles.subtitle}>
-                Get accurate, verifiable answers on UAE Corporate Tax, VAT, Decision 17 hotel & travel deductions, and EmaraTax filings with official statutory citations.
-              </Text>
-            </View>
-
-            {/* 3 Capabilities Badges Card */}
-            <View style={styles.featureCard}>
-              <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: colors.brand.primaryMuted }]}>
-                  <Ionicons name="shield-checkmark-outline" size={20} color={colors.brand.primary} />
-                </View>
-                <View style={styles.featureTextCol}>
-                  <Text style={styles.featureTitle}>UAE-Specific & FTA Grounded</Text>
-                  <Text style={styles.featureDesc}>
-                    Strictly backed by Federal Decree-Laws, Cabinet Decisions and FTA Clarifications. Zero hallucination.
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.itemDivider} />
-
-              <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: colors.semantic.infoBg }]}>
-                  <Ionicons name="flash-outline" size={20} color={colors.semantic.info} />
-                </View>
-                <View style={styles.featureTextCol}>
-                  <Text style={styles.featureTitle}>Business-Aware Compliance</Text>
-                  <Text style={styles.featureDesc}>
-                    Tailored automatically to your active business entity type (Mainland vs Free Zone, SBR AED 3M).
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.itemDivider} />
-
-              <View style={styles.featureRow}>
-                <View style={[styles.featureIconBox, { backgroundColor: colors.semantic.successBg }]}>
-                  <Ionicons name="document-text-outline" size={20} color={colors.semantic.successDark} />
-                </View>
-                <View style={styles.featureTextCol}>
-                  <Text style={styles.featureTitle}>Verifiable Citations</Text>
-                  <Text style={styles.featureDesc}>
-                    Every answer provides direct hyperlinks to official Ministry of Finance and FTA publications.
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            {/* 6 Quick Topic Starter Tiles */}
-            <Text style={styles.topicsHeading}>Explore UAE Tax Legislation</Text>
-            <View style={styles.topicsGrid}>
-              {[
-                { label: 'Small Business Relief', icon: 'shield-outline', color: colors.brand.primary, prompt: 'Is my business eligible for Small Business Relief (AED 3M)?' },
-                { label: 'Hotel & Travel VAT', icon: 'airplane-outline', color: colors.semantic.info, prompt: 'Can I claim VAT back on employee hotels & travel under Decision 17?' },
-                { label: 'Client Entertainment', icon: 'restaurant-outline', color: colors.semantic.warning, prompt: 'How are client entertainment and dining expenses treated under Art. 53?' },
-                { label: 'Freelancers & Individuals', icon: 'person-outline', color: colors.semantic.success, prompt: 'I am a freelancer/sole proprietor, what is my Corporate Tax threshold?' },
-                { label: 'CT Late Penalties', icon: 'alert-circle-outline', color: colors.semantic.risk, prompt: 'What are the Corporate Tax registration deadlines and late penalties?' },
-                { label: 'Peppol E-Invoicing', icon: 'receipt-outline', color: isDark ? '#A78BFA' : '#7C3AED', prompt: 'What are the UAE mandatory E-Invoicing (Peppol PINT) requirements?' },
-              ].map((topic) => (
-                <TouchableOpacity
-                  key={topic.label}
-                  style={styles.topicCard}
-                  activeOpacity={0.75}
-                  onPress={() => handleSelectQuickPrompt(topic.prompt)}
-                >
-                  <Ionicons name={topic.icon as any} size={22} color={topic.color} style={{ marginBottom: 6 }} />
-                  <Text style={styles.topicCardLabel}>{topic.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {/* Big Action Button */}
-            <TouchableOpacity
-              style={styles.primaryActionButton}
-              onPress={() => setViewState('thread')}
-              activeOpacity={0.88}
-            >
-              <Ionicons name="chatbubble-ellipses-outline" size={20} color={colors.neutral.onPrimary} style={{ marginRight: 8 }} />
-              <Text style={styles.primaryActionText}>Open Mizan AI Assistant →</Text>
-            </TouchableOpacity>
-
-            <View style={{ height: 40 }} />
-          </ScrollView>
-        )}
-
-        {/* ==================================================================== */}
-        {/* VIEW 2: CONVERSATION THREAD (4129.png Screen 2)                     */}
-        {/* ==================================================================== */}
-        {viewState === 'thread' && (
-          <View style={styles.threadContainer}>
-            <ScrollView
-              ref={scrollViewRef}
-              style={styles.chatScroll}
-              contentContainerStyle={styles.chatContent}
-              showsVerticalScrollIndicator={false}
-            >
-              {messages.map((msg) => {
-                const isUser = msg.sender === 'user';
-                return (
-                  <Animated.View
-                    key={msg.id}
-                    entering={FadeInUp.duration(240)}
-                    style={[styles.messageBubbleRow, isUser ? styles.userRow : styles.assistantRow]}
-                  >
-                    {!isUser && (
-                      <View style={styles.aiAvatarBox}>
-                        <View style={styles.brandLogoBoxMini}>
-                          <View style={styles.logoSlantBar1} />
-                          <View style={styles.logoSlantBar2} />
-                        </View>
-                      </View>
-                    )}
-
-                    <View style={[styles.bubbleContent, isUser ? styles.userBubble : styles.assistantBubble]}>
-                      <Text style={[styles.messageText, isUser ? styles.userMessageText : styles.assistantMessageText]}>
-                        {msg.text}
-                      </Text>
-
-                      {/* Expandable Grounded Sources Box */}
-                      {msg.sources && msg.sources.length > 0 && (
-                        <TouchableOpacity
-                          style={styles.sourcesBox}
-                          activeOpacity={0.8}
-                          onPress={() => handleOpenAnswerDetails(msg)}
-                        >
-                          <View style={styles.sourcesHeader}>
-                            <View style={styles.sourcesIconTitle}>
-                              <Ionicons name="shield-checkmark" size={14} color={colors.brand.primary} />
-                              <Text style={styles.sourcesTitle}>Official Statutory Sources ({msg.sources.length})</Text>
-                            </View>
-                            <Ionicons name="chevron-forward" size={14} color={colors.neutral.textSecondary} />
-                          </View>
-
-                          {msg.sources.map((src, i) => (
-                            <TouchableOpacity
-                              key={i}
-                              style={styles.sourceItem}
-                              activeOpacity={0.7}
-                              onPress={() => openSourceUrl(src.url)}
-                            >
-                              <View style={{ flex: 1 }}>
-                                <Text style={styles.sourceItemTitle}>{src.title}</Text>
-                                <Text style={styles.sourceItemSub}>{src.sub}</Text>
-                              </View>
-                              <Ionicons name="open-outline" size={14} color={colors.brand.primary} />
-                            </TouchableOpacity>
-                          ))}
-                        </TouchableOpacity>
-                      )}
-
-                      {/* Action Bar (Thumbs, Copy, Info) */}
-                      {!isUser && (
-                        <View style={styles.bubbleActionRow}>
-                          <TouchableOpacity
-                            style={styles.actionIconBtn}
-                            onPress={() => handleOpenAnswerDetails(msg)}
-                          >
-                            <Ionicons name="information-circle-outline" size={14} color={colors.brand.primary} />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.actionIconBtn}
-                            onPress={() => {
-                              AppPreferences.notification(Haptics.NotificationFeedbackType.Success);
-                              const citeText = msg.sources?.map((s) => `• ${s.title}`).join('\n') || '';
-                              Alert.alert(
-                                'Legal Summary Ready',
-                                `${msg.text.slice(0, 220)}${msg.text.length > 220 ? '...' : ''}\n\n${citeText}`,
-                                [
-                                  {
-                                    text: 'Share / Copy Text',
-                                    onPress: () =>
-                                      Share.share({
-                                        message: `Mizan Tax AI Consultation:\n\n${msg.text}\n\nSources:\n${citeText}`,
-                                      }),
-                                  },
-                                  { text: 'Close', style: 'cancel' },
-                                ]
-                              );
-                            }}
-                          >
-                            <Ionicons name="copy-outline" size={14} color={colors.neutral.textTertiary} />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.actionIconBtn}
-                            onPress={() => {
-                              AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
-                              const citeText = msg.sources?.map((s) => `• ${s.title}`).join('\n') || '';
-                              Share.share({
-                                message: `Mizan Tax AI Consultation:\n\n${msg.text}\n\n${citeText}`,
-                              }).catch(() => {});
-                            }}
-                          >
-                            <Ionicons name="share-outline" size={14} color={colors.neutral.textTertiary} />
-                          </TouchableOpacity>
-                          <Text style={styles.msgTimestamp}>{msg.timestamp}</Text>
-                        </View>
-                      )}
-                    </View>
-
-                    {isUser && (
-                      <View style={styles.userAvatarBox}>
-                        <Text style={styles.userAvatarText}>
-                          {(activeBusiness?.tradeName || activeBusiness?.legalName || 'ME').slice(0, 2).toUpperCase()}
-                        </Text>
-                      </View>
-                    )}
-                  </Animated.View>
-                );
-              })}
-
-              {isTyping && (
-                <Animated.View
-                  entering={FadeInUp.duration(200)}
-                  style={[styles.messageBubbleRow, styles.assistantRow]}
-                >
-                  <View style={styles.aiAvatarBox}>
-                    <View style={styles.brandLogoBoxMini}>
-                      <View style={styles.logoSlantBar1} />
-                      <View style={styles.logoSlantBar2} />
-                    </View>
-                  </View>
-                  <View style={[styles.bubbleContent, styles.assistantBubble, { paddingVertical: 14, paddingHorizontal: 16 }]}>
-                    <AnimatedTypingIndicator />
-                  </View>
-                </Animated.View>
-              )}
-
-              {/* Follow-up Suggestion Chips */}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.suggestionScroll}>
-                {followUpChips.map((chip, idx) => (
-                  <TouchableOpacity
-                    key={`${chip}-${idx}`}
-                    style={styles.chipPill}
-                    onPress={() => handleSelectQuickPrompt(chip)}
-                  >
-                    <Text style={styles.chipText}>{chip}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </ScrollView>
-
-            {/* Input Bar */}
-            <View style={styles.inputBarContainer}>
-              <TouchableOpacity
-                style={styles.plusBtn}
-                onPress={() => setViewState('landing')}
-              >
-                <Ionicons name="grid-outline" size={20} color={colors.neutral.textSecondary} />
-              </TouchableOpacity>
-
-              <TextInput
-                style={styles.chatInput}
-                placeholder={isRTL ? 'اطرح سؤالاً ضريبياً...' : 'Ask a UAE tax question...'}
-                placeholderTextColor={colors.neutral.textTertiary}
-                keyboardAppearance={isDark ? 'dark' : 'light'}
-                value={inputText}
-                onChangeText={setInputText}
-                onSubmitEditing={() => handleSendMessage()}
-              />
-
-              <TouchableOpacity
-                style={[styles.sendBtn, (!inputText.trim() || isTyping) && { opacity: 0.5 }]}
-                onPress={() => handleSendMessage()}
-                disabled={!inputText.trim() || isTyping}
-                activeOpacity={0.85}
-              >
-                {isTyping ? (
-                  <ActivityIndicator size="small" color={colors.neutral.onPrimary} />
-                ) : (
-                  <Ionicons name="send" size={16} color={colors.neutral.onPrimary} />
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {/* ==================================================================== */}
-        {/* VIEW 3: ANSWER DETAILS MODAL SHEET (4129.png Screen 3)               */}
-        {/* ==================================================================== */}
-        <SmoothModal
-          visible={showAnswerDetails}
-          onClose={() => setShowAnswerDetails(false)}
-          maxWidth={500}
+        <Pressable
+          onPress={() => router.back()}
+          style={[styles.topBtn, { borderColor: colors.neutral.border }]}
         >
-          <View style={[styles.modalContainer, { maxHeight: 600 }]}>
-            {/* Modal Header */}
-            <View style={styles.modalHeaderRow}>
-              <View>
-                <Text style={styles.modalTitle}>Statutory Answer Details</Text>
-                <Text style={styles.modalSubtitle}>Verifiable UAE Legislative Grounding</Text>
-              </View>
-              <TouchableOpacity onPress={() => setShowAnswerDetails(false)} style={styles.modalCloseBtn}>
-                <Ionicons name="close" size={22} color={colors.neutral.textPrimary} />
-              </TouchableOpacity>
-            </View>
+          <AppText variant="caption" weight="semiBold">
+            {isRTL ? '→ رجوع' : '← Back'}
+          </AppText>
+        </Pressable>
 
-            {/* 4 Segment Tabs */}
-            <View style={styles.modalTabsRow}>
-              {(['Answer', 'Sources', 'Related', 'Citations'] as DetailTab[]).map((tab) => {
-                const isSelected = activeDetailTab === tab;
-                return (
-                  <TouchableOpacity
-                    key={tab}
-                    style={[styles.modalTabPill, isSelected && styles.modalTabPillActive]}
-                    onPress={() => {
-                      AppPreferences.impact(Haptics.ImpactFeedbackStyle.Light);
-                      setActiveDetailTab(tab);
-                    }}
-                  >
-                    <Text style={[styles.modalTabText, isSelected && styles.modalTabTextActive]}>
-                      {tab}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+        <View style={styles.topCenter}>
+          <AppText variant="bodySmall" weight="bold">
+            {isRTL ? 'مساعد ميزان الضريبي' : 'Mizan Tax AI'}
+          </AppText>
+          <AppText variant="caption" tone="muted">
+            {isRTL ? 'مستند إلى تشريعات الهيئة' : 'FTA Statutory Grounded'}
+          </AppText>
+        </View>
 
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: spacing.lg, gap: 14 }}>
-              {/* TAB 1: ANSWER SUMMARY */}
-              {activeDetailTab === 'Answer' && (
-                <>
-                  <View style={styles.summaryCard}>
-                    <View style={styles.summaryTitleRow}>
-                      <Ionicons name="document-text" size={18} color={colors.brand.primary} />
-                      <Text style={styles.summaryHeading}>Legal Synthesis</Text>
-                    </View>
-                    <Text style={styles.summaryBodyText}>
-                      {activeMsgForDetails?.text || 'No answer text available'}
-                    </Text>
-                  </View>
+        <Pressable
+          onPress={() => setThreadsOpen(true)}
+          style={[styles.topBtn, { borderColor: colors.neutral.border }]}
+        >
+          <AppText variant="caption" weight="semiBold">
+            {isRTL ? 'المحادثات' : 'Threads'}
+          </AppText>
+        </Pressable>
+      </View>
 
-                  {activeMsgForDetails?.statutoryRationale && (
-                    <View style={styles.summaryCard}>
-                      <View style={styles.summaryTitleRow}>
-                        <Ionicons name="shield-checkmark" size={18} color={colors.semantic.successDark} />
-                        <Text style={styles.summaryHeading}>Statutory Authority</Text>
-                      </View>
-                      <Text style={styles.summaryBodyText}>
-                        {activeMsgForDetails.statutoryRationale}
-                      </Text>
-                    </View>
-                  )}
-                </>
-              )}
-
-              {/* TAB 2: SOURCES */}
-              {activeDetailTab === 'Sources' && (
-                <View style={styles.summaryCard}>
-                  <View style={styles.summaryTitleRow}>
-                    <Ionicons name="link" size={18} color={colors.brand.primary} />
-                    <Text style={styles.summaryHeading}>Official Legislative Sources</Text>
-                  </View>
-
-                  {activeMsgForDetails?.sources && activeMsgForDetails.sources.length > 0 ? (
-                    activeMsgForDetails.sources.map((src, i) => (
-                      <View key={i}>
-                        <TouchableOpacity
-                          style={styles.officialSourceRow}
-                          activeOpacity={0.7}
-                          onPress={() => openSourceUrl(src.url)}
-                        >
-                          <View style={styles.govIconBox}>
-                            <Ionicons name="shield" size={18} color={colors.brand.primary} />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.govTitle}>{src.title}</Text>
-                            <Text style={styles.govSub}>{src.sub}</Text>
-                          </View>
-                          <Ionicons name="open-outline" size={16} color={colors.brand.primary} />
-                        </TouchableOpacity>
-                        {i < activeMsgForDetails.sources!.length - 1 && <View style={styles.itemDivider} />}
-                      </View>
-                    ))
-                  ) : (
-                    <Text style={styles.emptyNotice}>No external sources linked.</Text>
-                  )}
-                </View>
-              )}
-
-              {/* TAB 3: RELATED & BUSINESS GROUNDING */}
-              {activeDetailTab === 'Related' && (
-                <>
-                  {activeMsgForDetails?.actionRequired && (
-                    <View style={styles.summaryCard}>
-                      <View style={styles.summaryTitleRow}>
-                        <Ionicons name="checkbox-outline" size={18} color={colors.semantic.info} />
-                        <Text style={styles.summaryHeading}>Action Required</Text>
-                      </View>
-                      <Text style={styles.summaryBodyText}>
-                        {activeMsgForDetails.actionRequired}
-                      </Text>
-                    </View>
-                  )}
-
-                  {activeMsgForDetails?.emaraTaxImpact && (
-                    <View style={styles.summaryCard}>
-                      <View style={styles.summaryTitleRow}>
-                        <Ionicons name="layers-outline" size={18} color={colors.brand.primary} />
-                        <Text style={styles.summaryHeading}>EmaraTax Box & Portal Mapping</Text>
-                      </View>
-                      <Text style={styles.summaryBodyText}>
-                        {activeMsgForDetails.emaraTaxImpact}
-                      </Text>
-                    </View>
-                  )}
-
-                  {activeMsgForDetails?.businessGrounding && (
-                    <View style={styles.summaryCard}>
-                      <View style={styles.summaryTitleRow}>
-                        <Ionicons name="business-outline" size={18} color={colors.semantic.successDark} />
-                        <Text style={styles.summaryHeading}>Active Entity Context</Text>
-                      </View>
-                      <Text style={styles.summaryBodyText}>
-                        Entity: {activeMsgForDetails.businessGrounding.entityName} ({activeMsgForDetails.businessGrounding.entityType})
-                        {'\n'}Jurisdiction: {activeMsgForDetails.businessGrounding.isFreeZone ? 'Free Zone' : 'Mainland'}
-                        {'\n'}Applicable Regime: {activeMsgForDetails.businessGrounding.applicableRelief}
-                      </Text>
-                    </View>
-                  )}
-                </>
-              )}
-
-              {/* TAB 4: CITATIONS */}
-              {activeDetailTab === 'Citations' && (
-                <View style={styles.summaryCard}>
-                  <View style={styles.summaryTitleRow}>
-                    <Ionicons name="ribbon-outline" size={18} color={colors.brand.primary} />
-                    <Text style={styles.summaryHeading}>Legal Citations & Verification</Text>
-                  </View>
-
-                  <View style={styles.checkListItem}>
-                    <Ionicons name="checkmark-circle" size={16} color={colors.semantic.success} />
-                    <Text style={styles.checkListText}>
-                      Federal Decree-Law No. 47 of 2022 on the Taxation of Corporations and Businesses
-                    </Text>
-                  </View>
-                  <View style={styles.checkListItem}>
-                    <Ionicons name="checkmark-circle" size={16} color={colors.semantic.success} />
-                    <Text style={styles.checkListText}>
-                      Federal Decree-Law No. 8 of 2017 on Value Added Tax
-                    </Text>
-                  </View>
-                  <View style={styles.checkListItem}>
-                    <Ionicons name="checkmark-circle" size={16} color={colors.semantic.success} />
-                    <Text style={styles.checkListText}>
-                      Ministerial Decision No. 17 of 2026 (Employee Duty Travel VAT Recovery)
-                    </Text>
-                  </View>
-                  <View style={styles.checkListItem}>
-                    <Ionicons name="checkmark-circle" size={16} color={colors.semantic.success} />
-                    <Text style={styles.checkListText}>
-                      Cabinet Decision No. 75 of 2023 (Administrative Penalties for Violations of Tax Laws)
-                    </Text>
-                  </View>
-                </View>
-              )}
-
-              {/* Statutory Disclaimer Note */}
-              <View style={styles.noteCard}>
-                <Ionicons name="information-circle-outline" size={18} color={colors.neutral.textSecondary} />
-                <View style={{ flex: 1, marginLeft: 8 }}>
-                  <Text style={styles.noteTitle}>Statutory Disclaimer</Text>
-                  <Text style={styles.noteText}>
-                    Mizan AI provides statutory intelligence grounded in published UAE federal legislation. For complex commercial arrangements, transfer pricing documentation, or formal audits, verify details on EmaraTax or consult a licensed UAE tax agent.
-                  </Text>
-                </View>
-              </View>
-            </ScrollView>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        {/* Chat Scroll Area */}
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={styles.chatContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Curated Prompt Chips */}
+          <View style={styles.promptWrap}>
+            {prompts.map((p) => (
+              <Pressable
+                key={p.id}
+                onPress={() => handleSend(p.prompt)}
+                style={[
+                  styles.promptChip,
+                  {
+                    backgroundColor: colors.neutral.surface,
+                    borderColor: colors.neutral.border,
+                  },
+                ]}
+              >
+                <AppText variant="caption" weight="medium">
+                  {p.prompt}
+                </AppText>
+              </Pressable>
+            ))}
           </View>
-        </SmoothModal>
+
+          {messages.length === 0 ? (
+            <View
+              style={[
+                styles.emptyBox,
+                {
+                  backgroundColor: colors.neutral.surface,
+                  borderColor: colors.neutral.border,
+                },
+              ]}
+            >
+              <AppText variant="bodySmall" weight="semiBold">
+                {isRTL ? 'اسأل عن القوانين الضريبية الإماراتية' : 'Ask UAE Statutory Tax Questions'}
+              </AppText>
+              <AppText variant="caption" tone="secondary">
+                {isRTL
+                  ? 'إجابات مستندة إلى المرسوم بقانون اتحادي 47/2022 و 8/2017.'
+                  : 'Answers grounded in Federal Decree-Law No. 47/2022 (CT) & No. 8/2017 (VAT).'}
+              </AppText>
+            </View>
+          ) : null}
+
+          {messages.map((msg) => {
+            const isUser = msg.role === 'user';
+            return (
+              <View
+                key={msg.id}
+                style={[styles.msgRow, isUser ? styles.msgRowUser : styles.msgRowAi]}
+              >
+                <View
+                  style={[
+                    styles.bubble,
+                    isUser
+                      ? { backgroundColor: colors.brand.primary }
+                      : {
+                          backgroundColor: colors.neutral.surface,
+                          borderColor: colors.neutral.border,
+                          borderWidth: borders.hairline,
+                        },
+                  ]}
+                >
+                  <AppText variant="bodySmall" tone={isUser ? 'inverted' : 'primary'}>
+                    {msg.content}
+                  </AppText>
+
+                  {!isUser && msg.citations && msg.citations.length > 0 ? (
+                    <View style={[styles.citeRow, { borderTopColor: colors.neutral.border }]}>
+                      {msg.citations.map((cite, i) => (
+                        <Badge key={`${msg.id}-c-${i}`} label={cite} variant="outline" />
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+            );
+          })}
+
+          {sending ? (
+            <View style={styles.typingRow}>
+              <ActivityIndicator size="small" color={colors.neutral.textPrimary} />
+              <AppText variant="caption" tone="muted">
+                {isRTL ? 'جارٍ البحث في التشريعات...' : 'Checking FTA statutes...'}
+              </AppText>
+            </View>
+          ) : null}
+
+          {error ? (
+            <View
+              style={[
+                styles.errorBox,
+                {
+                  backgroundColor: colors.neutral.surfaceSubtle,
+                  borderColor: colors.neutral.borderStrong,
+                },
+              ]}
+            >
+              <AppText variant="caption" weight="semiBold">
+                ! {error}
+              </AppText>
+            </View>
+          ) : null}
+        </ScrollView>
+
+        {/* Bottom Composer */}
+        <View
+          style={[
+            styles.composer,
+            { backgroundColor: colors.neutral.surface, borderTopColor: colors.neutral.border },
+          ]}
+        >
+          <TextInput
+            value={inputText}
+            onChangeText={setInputText}
+            placeholder={
+              isRTL ? 'اسأل عن ضريبة الشركات أو القيمة المضافة...' : 'Ask about UAE CT or VAT...'
+            }
+            placeholderTextColor={colors.neutral.textMuted}
+            style={[
+              styles.input,
+              inputFont,
+              {
+                backgroundColor: colors.neutral.canvas,
+                borderColor: colors.neutral.border,
+                color: colors.neutral.textPrimary,
+                textAlign: isRTL ? 'right' : 'left',
+              },
+            ]}
+            multiline
+          />
+          <Button
+            label={isRTL ? 'إرسال' : 'Send'}
+            variant="primary"
+            size="md"
+            fullWidth={false}
+            disabled={!inputText.trim() || sending}
+            onPress={() => handleSend()}
+          />
+        </View>
       </KeyboardAvoidingView>
+
+      {/* Conversation Threads ModalSheet */}
+      <ModalSheet
+        visible={threadsOpen}
+        onClose={() => setThreadsOpen(false)}
+        title={isRTL ? 'المحادثات السابقة' : 'Conversation Threads'}
+      >
+        <Button
+          label={isRTL ? '+ محادثة جديدة' : '+ New Conversation'}
+          variant="primary"
+          onPress={handleNewThread}
+        />
+        {conversations.length === 0 ? (
+          <AppText variant="caption" tone="secondary">
+            {isRTL ? 'لا توجد محادثات محفوظة بعد.' : 'No saved conversations yet.'}
+          </AppText>
+        ) : (
+          conversations.slice(0, 6).map((c) => (
+            <Pressable
+              key={c.id}
+              onPress={() => handleSelectThread(c.id)}
+              style={[
+                styles.threadItem,
+                {
+                  borderColor:
+                    c.id === activeConvId ? colors.neutral.borderStrong : colors.neutral.border,
+                },
+              ]}
+            >
+              <AppText variant="bodySmall" weight="semiBold" numberOfLines={1}>
+                {c.title || 'Tax Inquiry'}
+              </AppText>
+              <AppText variant="caption" tone="muted" tabular>
+                {(c.updatedAt || c.createdAt || '').toString().slice(0, 10)}
+              </AppText>
+            </Pressable>
+          ))
+        )}
+      </ModalSheet>
     </SafeAreaView>
   );
 }
 
-// Dynamic theme-aware stylesheet factory for GroundedChatScreen
-const createStyles = (colors: ThemeColors, _isDark: boolean, shadows: ThemeShadows) => StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.neutral.canvas,
-  },
-  headerRow: {
+const styles = StyleSheet.create({
+  safe: { flex: 1 },
+  flex: { flex: 1 },
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    backgroundColor: colors.neutral.canvas,
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    flex: 1,
-  },
-  backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.neutral.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  groundedTagPill: {
-    backgroundColor: colors.brand.primaryMuted,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: colors.brand.blushAlt,
-  },
-  groundedTagText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.brand.primary,
-  },
-  businessContextBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
-  },
-  businessContextText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.neutral.textSecondary,
-    maxWidth: 220,
-  },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.neutral.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-  },
-  container: {
-    flex: 1,
-  },
-  contentContainer: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xs,
-  },
-  titleBanner: {
-    marginBottom: spacing.md,
-  },
-  titleBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  mainTitle: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: colors.neutral.textPrimary,
-  },
-  groundedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.semantic.successBg,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: radii.pill,
-  },
-  groundedBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: colors.semantic.successDark,
-  },
-  subtitle: {
-    fontSize: 13,
-    color: colors.neutral.textSecondary,
-    lineHeight: 18,
-  },
-  featureCard: {
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.xl,
     paddingHorizontal: spacing.md,
-    paddingVertical: 4,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    ...shadows.card,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: borders.hairline,
   },
-  featureRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
+  topBtn: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs + 2,
+    borderRadius: radii.sm,
+    borderWidth: borders.hairline,
   },
-  featureIconBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
+  topCenter: { alignItems: 'center' },
+  chatContent: {
+    padding: spacing.md,
+    gap: spacing.sm,
   },
-  featureTextCol: {
-    flex: 1,
-  },
-  featureTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    marginBottom: 2,
-  },
-  featureDesc: {
-    fontSize: 12,
-    color: colors.neutral.textSecondary,
-    lineHeight: 16,
-  },
-  itemDivider: {
-    height: 1,
-    backgroundColor: colors.neutral.border,
-  },
-  topicsHeading: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-    marginTop: spacing.lg,
-    marginBottom: spacing.sm,
-  },
-  topicsGrid: {
+  promptWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: spacing.xs,
   },
-  topicCard: {
-    width: '48.5%',
-    backgroundColor: colors.neutral.surface,
+  promptChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs + 2,
+    borderRadius: radii.pill,
+    borderWidth: borders.hairline,
+  },
+  emptyBox: {
+    borderWidth: borders.hairline,
     borderRadius: radii.lg,
     padding: spacing.md,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    ...shadows.card,
-  },
-  topicCardLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    textAlign: 'center',
-  },
-  primaryActionButton: {
-    backgroundColor: colors.brand.primary,
-    borderRadius: radii.lg,
-    paddingVertical: 15,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: spacing.lg,
-    ...shadows.pillButton,
-  },
-  primaryActionText: {
-    color: colors.neutral.onPrimary,
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  threadContainer: {
-    flex: 1,
-  },
-  chatScroll: {
-    flex: 1,
-  },
-  chatContent: {
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    gap: 12,
-  },
-  messageBubbleRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
-  userRow: {
-    justifyContent: 'flex-end',
-  },
-  assistantRow: {
-    justifyContent: 'flex-start',
-  },
-  aiAvatarBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.brand.primaryMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  brandLogoBoxMini: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-  },
-  logoSlantBar1: {
-    width: 4,
-    height: 12,
-    backgroundColor: colors.brand.primary,
-    borderRadius: 2,
-    transform: [{ skewX: '-18deg' }],
-  },
-  logoSlantBar2: {
-    width: 4,
-    height: 12,
-    backgroundColor: colors.brand.primary,
-    borderRadius: 2,
-    transform: [{ skewX: '-18deg' }],
-  },
-  userAvatarBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.neutral.surfaceSubdued,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  userAvatarText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  bubbleContent: {
-    maxWidth: '82%',
-    borderRadius: radii.xl,
-    padding: spacing.md,
-  },
-  userBubble: {
-    backgroundColor: colors.brand.primaryMuted,
-    borderTopRightRadius: 4,
-  },
-  assistantBubble: {
-    backgroundColor: colors.neutral.surface,
-    borderTopLeftRadius: 4,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    ...shadows.card,
-  },
-  messageText: {
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  userMessageText: {
-    color: colors.neutral.textPrimary,
-    fontWeight: '600',
-  },
-  assistantMessageText: {
-    color: colors.neutral.textPrimary,
-  },
-  sourcesBox: {
-    marginTop: 10,
-    backgroundColor: colors.brand.blushSoft,
-    borderRadius: radii.md,
-    padding: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.brand.blushAlt,
-  },
-  sourcesHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  sourcesIconTitle: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 4,
   },
-  sourcesTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.brand.primary,
-  },
-  sourceItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 5,
-  },
-  sourceItemTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-  },
-  sourceItemSub: {
-    fontSize: 10,
-    color: colors.neutral.textSecondary,
-  },
-  bubbleActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginTop: 8,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: colors.neutral.border,
-  },
-  actionIconBtn: {
-    padding: 2,
-  },
-  msgTimestamp: {
-    fontSize: 10,
-    color: colors.neutral.textTertiary,
-    marginLeft: 'auto',
-  },
-  suggestionScroll: {
-    marginVertical: 6,
-  },
-  chipPill: {
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.pill,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    marginRight: 6,
-  },
-  chipText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.neutral.textSecondary,
-  },
-  inputBarContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.neutral.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: colors.neutral.border,
-    gap: 8,
-  },
-  plusBtn: {
-    padding: 4,
-  },
-  chatInput: {
-    flex: 1,
-    backgroundColor: colors.neutral.canvas,
-    borderRadius: radii.pill,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    fontSize: 13,
-    color: colors.neutral.textPrimary,
-  },
-  sendBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.brand.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadows.pillButton,
-  },
-  modalContainer: {
-    flex: 1,
-    backgroundColor: colors.neutral.canvas,
-  },
-  modalHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.neutral.border,
-    backgroundColor: colors.neutral.surface,
-  },
-  modalTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  modalSubtitle: {
-    fontSize: 11,
-    color: colors.neutral.textSecondary,
-    marginTop: 2,
-  },
-  modalCloseBtn: {
-    padding: 4,
-  },
-  modalTabsRow: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    backgroundColor: colors.neutral.surface,
-    gap: 6,
-  },
-  modalTabPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: radii.pill,
-    backgroundColor: colors.neutral.canvas,
-  },
-  modalTabPillActive: {
-    backgroundColor: colors.brand.primary,
-  },
-  modalTabText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.neutral.textSecondary,
-  },
-  modalTabTextActive: {
-    color: colors.neutral.onPrimary,
-  },
-  summaryCard: {
-    backgroundColor: colors.neutral.surface,
-    borderRadius: radii.xl,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.neutral.border,
-    ...shadows.card,
-  },
-  summaryTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 8,
-  },
-  summaryHeading: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: colors.neutral.textPrimary,
-  },
-  summaryBodyText: {
-    fontSize: 13,
-    color: colors.neutral.textPrimary,
-    lineHeight: 18,
-  },
-  checkListItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 4,
-  },
-  checkListText: {
-    fontSize: 12,
-    color: colors.neutral.textSecondary,
-    flex: 1,
-  },
-  officialSourceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  govIconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: colors.brand.primaryMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  govTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    marginBottom: 2,
-  },
-  govSub: {
-    fontSize: 10,
-    color: colors.neutral.textTertiary,
-  },
-  emptyNotice: {
-    fontSize: 12,
-    color: colors.neutral.textTertiary,
-    fontStyle: 'italic',
-  },
-  noteCard: {
-    flexDirection: 'row',
-    backgroundColor: colors.neutral.surfaceInset,
+  msgRow: { flexDirection: 'row' },
+  msgRowUser: { justifyContent: 'flex-end' },
+  msgRowAi: { justifyContent: 'flex-start' },
+  bubble: {
+    maxWidth: '86%',
     borderRadius: radii.lg,
-    padding: spacing.md,
+    padding: spacing.sm,
+    gap: spacing.xs,
   },
-  noteTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.neutral.textPrimary,
-    marginBottom: 2,
+  citeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xxs + 2,
+    paddingTop: spacing.xs,
+    borderTopWidth: borders.hairline,
   },
-  noteText: {
-    fontSize: 11,
-    color: colors.neutral.textSecondary,
-    lineHeight: 15,
+  typingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  errorBox: {
+    borderWidth: borders.hairline,
+    borderRadius: radii.sm,
+    padding: spacing.sm,
+  },
+  composer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: spacing.xs,
+    padding: spacing.sm,
+    borderTopWidth: borders.hairline,
+  },
+  input: {
+    flex: 1,
+    minHeight: 40,
+    maxHeight: 100,
+    borderRadius: radii.md,
+    borderWidth: borders.hairline,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    fontSize: typeScale.bodySmall.fontSize,
+  },
+  threadItem: {
+    padding: spacing.sm,
+    borderRadius: radii.md,
+    borderWidth: borders.hairline,
+    gap: 2,
   },
 });

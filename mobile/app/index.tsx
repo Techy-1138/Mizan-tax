@@ -1,132 +1,151 @@
 // ============================================================================
-// Mizan (ميزان) - Root Gatekeeper & Route Dispatcher
-// Evaluates authentication & business registration status on startup.
-// Prevents unauthenticated users and unregistered businesses from exploring the app.
+// Mizan (ميزان) - Auth & Business Gatekeeper (Screen 1A)
+// Resolves Firebase Auth session -> syncs token -> checks registered businesses
+// -> routes to /auth/login, /onboarding/business, or /(tabs).
 // ============================================================================
 
-import React, { useEffect } from 'react';
-import { StyleSheet, View, Text, ActivityIndicator } from 'react-native';
-import { useRouter } from 'expo-router';
-import { SafeAreaView } from '../src/components/SafeAreaView';
-import { ThemeColors, radii, spacing, fontStyles } from '../src/theme/tokens';
-import { useThemedStyles } from '../src/context/ThemeContext';
-import { useBusiness } from '../src/context/BusinessContext';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { useRootNavigationState, useRouter } from 'expo-router';
+import { auth, onAuthStateChanged } from '../src/services/firebase';
+import { MizanApi } from '../src/services/api';
+import { useTheme } from '../src/context/ThemeContext';
 import { useLocale } from '../src/context/LocaleContext';
+import { radii, spacing } from '../src/theme/tokens';
+import { AppText, Button, Card, Screen } from '../src/ui';
 
-export default function RootIndexScreen() {
+/**
+ * Monochrome Gatekeeper resolving initial session and entity state.
+ */
+export default function GatekeeperScreen() {
   const router = useRouter();
+  const rootNavState = useRootNavigationState();
+  const { colors } = useTheme();
   const { isRTL } = useLocale();
-  const styles = useThemedStyles(createStyles);
-  const { isAuthenticated, businesses, isLoading } = useBusiness();
+
+  const [error, setError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(true);
+
+  const resolveDestination = useCallback(async () => {
+    setError(null);
+    setChecking(true);
+
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      router.replace('/auth/login');
+      return;
+    }
+
+    try {
+      // Refresh Firebase ID token so backend requests are authorized
+      const idToken = await currentUser.getIdToken();
+      MizanApi.setAuthToken(idToken);
+
+      // Check whether the user already has at least one UAE business entity
+      const businesses = await MizanApi.getBusinesses();
+      if (Array.isArray(businesses) && businesses.length > 0) {
+        router.replace('/(tabs)');
+      } else {
+        router.replace('/onboarding/business');
+      }
+    } catch (err: any) {
+      setError(
+        err?.message ||
+          (isRTL
+            ? 'تعذر التحقق من الجلسة. يرجى المحاولة مرة أخرى.'
+            : 'Unable to verify your session. Please check your connection and retry.')
+      );
+      setChecking(false);
+    }
+  }, [isRTL, router]);
 
   useEffect(() => {
-    if (isLoading) return;
+    // Wait until Expo Router's root navigator is mounted before redirecting
+    if (!rootNavState?.key) return;
 
-    if (!isAuthenticated) {
-      // Unauthenticated -> Gate to Login
-      router.replace('/auth/login');
-    } else if (!businesses || businesses.length === 0) {
-      // Authenticated but no business entity registered -> Gate to Onboarding
-      router.replace('/onboarding/business');
-    } else {
-      // Authenticated with registered business -> Main Dashboard
-      router.replace('/(tabs)');
-    }
-  }, [isLoading, isAuthenticated, businesses, router]);
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        router.replace('/auth/login');
+        return;
+      }
+      resolveDestination();
+    });
+
+    return () => unsubscribe();
+  }, [rootNavState?.key, resolveDestination, router]);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <View style={styles.centerContent}>
-        <View style={styles.brandLogoBox}>
-          <View style={styles.logoSlantBar1} />
-          <View style={styles.logoSlantBar2} />
-        </View>
-        <Text style={styles.brandTitle}>Mizan ميزان</Text>
-        <Text style={styles.brandTagline}>
-          {isRTL ? 'منصة الامتثال والذكاء الضريبي لدولة الإمارات' : 'UAE Tax Intelligence & Compliance Platform'}
-        </Text>
-        <View style={styles.loadingContainer}>
-          <View style={styles.skeletonPulseBox} />
-          <Text style={styles.loadingText}>
-            {isRTL ? 'جاري التحقق من الجلسة وبيانات المنشأة...' : 'Verifying session and business entity...'}
-          </Text>
-        </View>
+    <Screen contentContainerStyle={styles.container}>
+      <View
+        style={[
+          styles.mark,
+          { backgroundColor: colors.brand.primary },
+        ]}
+      >
+        <AppText variant="h1" tone="inverted">
+          م
+        </AppText>
       </View>
-    </SafeAreaView>
+
+      {checking && !error ? (
+        <View style={styles.status}>
+          <ActivityIndicator size="small" color={colors.neutral.textPrimary} />
+          <AppText variant="bodySmall" tone="secondary">
+            {isRTL ? 'جارٍ التحقق من الجلسة...' : 'Verifying workspace session...'}
+          </AppText>
+        </View>
+      ) : null}
+
+      {error ? (
+        <Card style={styles.errorCard}>
+          <AppText variant="h3">
+            {isRTL ? 'تعذر الاتصال' : 'Connection Issue'}
+          </AppText>
+          <AppText variant="bodySmall" tone="secondary">
+            {error}
+          </AppText>
+          <View style={styles.errorActions}>
+            <Button
+              label={isRTL ? 'إعادة المحاولة' : 'Retry'}
+              variant="primary"
+              onPress={resolveDestination}
+            />
+            <Button
+              label={isRTL ? 'العودة لتسجيل الدخول' : 'Back to Sign In'}
+              variant="outline"
+              onPress={() => router.replace('/auth/login')}
+            />
+          </View>
+        </Card>
+      ) : null}
+    </Screen>
   );
 }
 
-const createStyles = (colors: ThemeColors) =>
-  StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: colors.neutral.canvas,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    centerContent: {
-      alignItems: 'center',
-      paddingHorizontal: spacing.xl,
-    },
-    brandLogoBox: {
-      width: 64,
-      height: 64,
-      backgroundColor: colors.brand.primary,
-      borderRadius: radii.md,
-      flexDirection: 'row',
-      justifyContent: 'center',
-      alignItems: 'center',
-      gap: 6,
-      marginBottom: spacing.md,
-      elevation: 4,
-      shadowColor: colors.brand.primary,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.25,
-      shadowRadius: 8,
-    },
-    logoSlantBar1: {
-      width: 8,
-      height: 32,
-      backgroundColor: colors.neutral.onPrimary,
-      borderRadius: 4,
-      transform: [{ skewX: '-15deg' }],
-    },
-    logoSlantBar2: {
-      width: 8,
-      height: 32,
-      backgroundColor: colors.neutral.onPrimary,
-      borderRadius: 4,
-      transform: [{ skewX: '-15deg' }],
-    },
-    brandTitle: {
-      ...fontStyles.displayBold,
-      fontSize: 28,
-      color: colors.neutral.textPrimary,
-      letterSpacing: -0.5,
-    },
-    brandTagline: {
-      ...fontStyles.bodyRegular,
-      fontSize: 13,
-      color: colors.neutral.textSecondary,
-      marginTop: 6,
-      textAlign: 'center',
-    },
-    loadingContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.sm,
-      marginTop: spacing.xxl,
-    },
-    skeletonPulseBox: {
-      width: 14,
-      height: 14,
-      borderRadius: 7,
-      backgroundColor: colors.brand.primary,
-      opacity: 0.85,
-    },
-    loadingText: {
-      ...fontStyles.bodyMedium,
-      fontSize: 12,
-      color: colors.neutral.textSecondary,
-    },
-  });
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.lg,
+  },
+  mark: {
+    width: 56,
+    height: 56,
+    borderRadius: radii.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  status: {
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  errorCard: {
+    width: '100%',
+    gap: spacing.sm,
+  },
+  errorActions: {
+    gap: spacing.xs,
+    marginTop: spacing.xs,
+  },
+});

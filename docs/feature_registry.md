@@ -1,5 +1,7 @@
 # Mizan (ميزان) - UAE Tax Intelligence Platform: Feature Registry
 
+> **UI Overhaul Status (2026-11-14):** The mobile UI layer (`mobile/app/` screens and `mobile/src/components/` / `animations/`) has been reset to a clean Expo Router shell (`mobile/app/_layout.tsx`, `mobile/app/index.tsx`) for screen-by-screen reconstruction. All `backend/` statutory engines, database schemas, and Firebase Auth/Firestore integrations remain intact (previous UI archived on git branch `archive/pre-ui-overhaul`).
+
 This registry tracks the status, tier, and architectural boundaries of all core platform capabilities.
 
 | Feature ID | Feature Name | Description | Module / Scope | Status |

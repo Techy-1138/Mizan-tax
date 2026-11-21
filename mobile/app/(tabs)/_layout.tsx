@@ -1,87 +1,69 @@
 // ============================================================================
-// Mizan (ميزان) - 5-Tab Floating Bottom Navigation Bar
-// Styled with Desert Orange, Warm Pearl, Charcoal and dynamic icons
-// Tabs: Home | Bookkeeping | Invoicing | Tax & Filings | More
+// Mizan (ميزان) - Monochrome 5-Tab Bottom Navigator
+// Tabs: Home, Books, Invoices, Tax, Profile with 1px top hairline border.
 // ============================================================================
 
-import React, { useEffect } from 'react';
-import { Tabs, useRouter } from 'expo-router';
-import { StyleSheet } from 'react-native';
-import { ThemeColors } from '../../src/theme/tokens';
-import { useTheme, useThemedStyles } from '../../src/context/ThemeContext';
+import React from 'react';
+import { Tabs } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
-import { useBusiness } from '../../src/context/BusinessContext';
-import { AnimatedTabButton, AnimatedTabIcon } from '../../src/animations';
+import { borders, getFont } from '../../src/theme/tokens';
 
+/**
+ * Monochrome tab navigator for authenticated core workspaces.
+ */
 export default function TabsLayout() {
-  const router = useRouter();
-  const { t } = useLocale();
   const { colors } = useTheme();
-  const styles = useThemedStyles(createStyles);
-  const { isAuthenticated, businesses, isLoading } = useBusiness();
-
-  useEffect(() => {
-    if (isLoading) return;
-    if (!isAuthenticated) {
-      router.replace('/auth/login');
-    } else if (!businesses || businesses.length === 0) {
-      router.replace('/onboarding/business');
-    }
-  }, [isLoading, isAuthenticated, businesses, router]);
+  const { isRTL } = useLocale();
+  const labelFont = getFont('medium', isRTL, false);
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.brand.primary,
-        tabBarInactiveTintColor: colors.neutral.textTertiary,
-        tabBarStyle: styles.tabBar,
-        tabBarLabelStyle: styles.tabBarLabel,
-        tabBarItemStyle: styles.tabBarItem,
-        tabBarButton: (props) => <AnimatedTabButton {...props} />,
+        tabBarInactiveTintColor: colors.neutral.textMuted,
+        tabBarAllowFontScaling: false,
+        tabBarStyle: {
+          backgroundColor: colors.neutral.surface,
+          borderTopColor: colors.neutral.border,
+          borderTopWidth: borders.hairline,
+          elevation: 0,
+        },
+        tabBarLabelStyle: {
+          fontFamily: labelFont.fontFamily,
+          fontSize: 11,
+        },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          title: t.tabs.home || 'Home',
+          title: isRTL ? 'الرئيسية' : 'Home',
           tabBarIcon: ({ color, focused }) => (
-            <AnimatedTabIcon
-              nameFilled="home"
-              nameOutline="home-outline"
-              focused={focused}
-              color={color as string}
-              size={22}
-            />
+            <Ionicons name={focused ? 'grid' : 'grid-outline'} size={20} color={color as string} />
           ),
         }}
       />
       <Tabs.Screen
         name="books"
         options={{
-          title: t.tabs.books || 'Bookkeeping',
+          title: isRTL ? 'الدفاتر' : 'Books',
           tabBarIcon: ({ color, focused }) => (
-            <AnimatedTabIcon
-              nameFilled="layers"
-              nameOutline="layers-outline"
-              focused={focused}
-              color={color as string}
-              size={22}
-            />
+            <Ionicons name={focused ? 'book' : 'book-outline'} size={20} color={color as string} />
           ),
         }}
       />
       <Tabs.Screen
         name="invoices"
         options={{
-          title: t.tabs.invoicing || 'Invoicing',
+          title: isRTL ? 'الفواتير' : 'Invoices',
           tabBarIcon: ({ color, focused }) => (
-            <AnimatedTabIcon
-              nameFilled="document-text"
-              nameOutline="document-text-outline"
-              focused={focused}
+            <Ionicons
+              name={focused ? 'document-text' : 'document-text-outline'}
+              size={20}
               color={color as string}
-              size={22}
             />
           ),
         }}
@@ -89,14 +71,12 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="tax"
         options={{
-          title: t.tabs.tax || 'Tax & Filings',
+          title: isRTL ? 'الضرائب' : 'Tax',
           tabBarIcon: ({ color, focused }) => (
-            <AnimatedTabIcon
-              nameFilled="pie-chart"
-              nameOutline="pie-chart-outline"
-              focused={focused}
+            <Ionicons
+              name={focused ? 'shield-checkmark' : 'shield-checkmark-outline'}
+              size={20}
               color={color as string}
-              size={22}
             />
           ),
         }}
@@ -104,50 +84,12 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="profile"
         options={{
-          title: t.tabs.more || 'More',
+          title: isRTL ? 'الحساب' : 'Profile',
           tabBarIcon: ({ color, focused }) => (
-            <AnimatedTabIcon
-              nameFilled="grid"
-              nameOutline="grid-outline"
-              focused={focused}
-              color={color as string}
-              size={22}
-            />
+            <Ionicons name={focused ? 'person' : 'person-outline'} size={20} color={color as string} />
           ),
-        }}
-      />
-      {/* Retain learn as a secondary accessible route */}
-      <Tabs.Screen
-        name="learn"
-        options={{
-          href: null, // Hidden from bottom bar, accessed via In-app links
         }}
       />
     </Tabs>
   );
 }
-
-const createStyles = (colors: ThemeColors, isDark: boolean) =>
-  StyleSheet.create({
-    tabBar: {
-      backgroundColor: colors.neutral.surface,
-      borderTopColor: colors.neutral.border,
-      borderTopWidth: 1,
-      height: 64,
-      paddingBottom: 8,
-      paddingTop: 8,
-      elevation: 10,
-      shadowColor: '#000000',
-      shadowOffset: { width: 0, height: -3 },
-      shadowOpacity: isDark ? 0.35 : 0.06,
-      shadowRadius: 10,
-    },
-    tabBarItem: {
-      paddingVertical: 2,
-    },
-    tabBarLabel: {
-      fontSize: 11,
-      fontWeight: '700',
-      marginTop: 2,
-    },
-  });
