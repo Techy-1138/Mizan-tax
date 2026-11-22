@@ -5,13 +5,14 @@
 // ============================================================================
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Image, StyleSheet, View } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { useRootNavigationState, useRouter } from 'expo-router';
 import { auth, onAuthStateChanged } from '../src/services/firebase';
 import { MizanApi } from '../src/services/api';
 import { useTheme } from '../src/context/ThemeContext';
 import { useLocale } from '../src/context/LocaleContext';
-import { radii, spacing } from '../src/theme/tokens';
+import { borders, radii, spacing } from '../src/theme/tokens';
 import { AppText, Button, Card, Screen } from '../src/ui';
 
 /**
@@ -74,55 +75,91 @@ export default function GatekeeperScreen() {
     return () => unsubscribe();
   }, [rootNavState?.key, resolveDestination, router]);
 
+  // Render the full-screen monochrome wavy splash screen while resolving auth & entities
+  if (!error) {
+    return (
+      <View style={styles.splashRoot}>
+        <StatusBar style="light" />
+        <Image
+          source={require('../assets/splash-full.jpg')}
+          style={styles.splashArtwork}
+          resizeMode="cover"
+        />
+        {checking ? (
+          <View style={styles.splashStatus}>
+            <ActivityIndicator size="small" color="#FFFFFF" />
+            <AppText variant="caption" style={styles.splashStatusText}>
+              {isRTL ? 'جارٍ التحقق من الجلسة...' : 'Verifying workspace session...'}
+            </AppText>
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
   return (
     <Screen contentContainerStyle={styles.container}>
       <View
         style={[
           styles.mark,
-          { backgroundColor: colors.brand.primary },
+          { backgroundColor: '#000000', borderColor: colors.neutral.border },
         ]}
       >
-        <AppText variant="h1" tone="inverted">
-          م
-        </AppText>
+        <Image
+          source={require('../assets/brand-mark.png')}
+          style={styles.markImage}
+          resizeMode="contain"
+        />
       </View>
 
-      {checking && !error ? (
-        <View style={styles.status}>
-          <ActivityIndicator size="small" color={colors.neutral.textPrimary} />
-          <AppText variant="bodySmall" tone="secondary">
-            {isRTL ? 'جارٍ التحقق من الجلسة...' : 'Verifying workspace session...'}
-          </AppText>
+      <Card style={styles.errorCard}>
+        <AppText variant="h3">
+          {isRTL ? 'تعذر الاتصال' : 'Connection Issue'}
+        </AppText>
+        <AppText variant="bodySmall" tone="secondary">
+          {error}
+        </AppText>
+        <View style={styles.errorActions}>
+          <Button
+            label={isRTL ? 'إعادة المحاولة' : 'Retry'}
+            variant="primary"
+            onPress={resolveDestination}
+          />
+          <Button
+            label={isRTL ? 'العودة لتسجيل الدخول' : 'Back to Sign In'}
+            variant="outline"
+            onPress={() => router.replace('/auth/login')}
+          />
         </View>
-      ) : null}
-
-      {error ? (
-        <Card style={styles.errorCard}>
-          <AppText variant="h3">
-            {isRTL ? 'تعذر الاتصال' : 'Connection Issue'}
-          </AppText>
-          <AppText variant="bodySmall" tone="secondary">
-            {error}
-          </AppText>
-          <View style={styles.errorActions}>
-            <Button
-              label={isRTL ? 'إعادة المحاولة' : 'Retry'}
-              variant="primary"
-              onPress={resolveDestination}
-            />
-            <Button
-              label={isRTL ? 'العودة لتسجيل الدخول' : 'Back to Sign In'}
-              variant="outline"
-              onPress={() => router.replace('/auth/login')}
-            />
-          </View>
-        </Card>
-      ) : null}
+      </Card>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  splashRoot: {
+    flex: 1,
+    backgroundColor: '#000000',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  splashArtwork: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+  },
+  splashStatus: {
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginBottom: spacing.xxl * 1.5,
+  },
+  splashStatusText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+  },
   container: {
     flex: 1,
     alignItems: 'center',
@@ -133,12 +170,13 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: radii.lg,
+    borderWidth: borders.hairline,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  status: {
-    alignItems: 'center',
-    gap: spacing.xs,
+  markImage: {
+    width: 36,
+    height: 36,
   },
   errorCard: {
     width: '100%',

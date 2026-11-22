@@ -5,7 +5,7 @@
 // ============================================================================
 
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL, MizanApi } from '../../src/services/api';
@@ -170,10 +170,18 @@ export default function LoginScreen() {
 
       {/* Brand Mark & Heading */}
       <View style={styles.header}>
-        <View style={[styles.brandMark, { backgroundColor: colors.brand.primary }]}>
-          <AppText variant="h2" tone="inverted">
-            م
-          </AppText>
+        {/* Render crisp trimmed calligraphy emblem on pitch-black tile with subtle border */}
+        <View
+          style={[
+            styles.brandMark,
+            { backgroundColor: '#000000', borderColor: colors.neutral.border },
+          ]}
+        >
+          <Image
+            source={require('../../assets/brand-mark.png')}
+            style={styles.brandMarkImage}
+            resizeMode="contain"
+          />
         </View>
         <AppText variant="h1" style={styles.title}>
           {isRTL ? 'تسجيل الدخول إلى ميزان' : 'Sign in to Mizan'}
@@ -359,9 +367,14 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: radii.md,
+    borderWidth: borders.hairline,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: spacing.xxs,
+  },
+  brandMarkImage: {
+    width: 28,
+    height: 28,
   },
   title: {
     marginTop: spacing.xxs,
