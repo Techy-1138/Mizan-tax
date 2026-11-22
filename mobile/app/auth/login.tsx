@@ -4,11 +4,11 @@
 // 1-Tap Google Sign-In (native-guarded), and Forgot Password ModalSheet.
 // ============================================================================
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { MizanApi } from '../../src/services/api';
+import { API_BASE_URL, MizanApi } from '../../src/services/api';
 import { performGoogleSignIn } from '../../src/services/googleAuth';
 import { getFriendlyErrorMessage } from '../../src/utils/errorMessages';
 import { useTheme } from '../../src/context/ThemeContext';
@@ -46,6 +46,11 @@ export default function LoginScreen() {
   const [resetEmail, setResetEmail] = useState('');
   const [resetLoading, setResetLoading] = useState(false);
   const [resetFeedback, setResetFeedback] = useState<string | null>(null);
+
+  // Silently pre-warm Cloud Run & Neon PostgreSQL while the user types credentials
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/api/v1/auth/health`, { method: 'GET' }).catch(() => {});
+  }, []);
 
   /** Routes authenticated user to Tabs (if business exists) or Onboarding */
   const routeAfterAuth = async () => {

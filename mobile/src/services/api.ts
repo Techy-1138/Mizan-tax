@@ -226,13 +226,21 @@ export class MizanApi {
       throw fbErr;
     }
 
-    // 2. Synchronize profile and active organisation with PostgreSQL backend
-    try {
-      const syncRes = await fetch(`${API_BASE_URL}/api/v1/auth/sync`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-      });
-      if (syncRes.ok) {
+    // 2. Synchronize profile and active organisation with PostgreSQL backend non-blockingly
+    // so login navigation completes immediately after Firebase Auth succeeds.
+    const fallbackUser = {
+      id: firebaseUser?.uid || 'user-default',
+      email: firebaseUser?.email || payload.email.trim(),
+      fullName: firebaseUser?.displayName || 'Taxpayer',
+    };
+    await AppStorage.setItem(STORAGE_KEY_USER_PROFILE, JSON.stringify(fallbackUser));
+
+    fetch(`${API_BASE_URL}/api/v1/auth/sync`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+    })
+      .then(async (syncRes) => {
+        if (!syncRes.ok) return;
         const data = await syncRes.json();
         if (data.activeOrganisation?.id) {
           this.setAuthToken(idToken, data.activeOrganisation.id);
@@ -241,18 +249,11 @@ export class MizanApi {
         if (data.user) {
           await AppStorage.setItem(STORAGE_KEY_USER_PROFILE, JSON.stringify(data.user));
         }
-        return data;
-      }
-    } catch (syncErr) {
-      console.warn('Backend user profile synchronization deferred:', syncErr);
-    }
+      })
+      .catch((syncErr) => {
+        console.warn('Background user profile synchronization deferred:', syncErr);
+      });
 
-    const fallbackUser = {
-      id: firebaseUser?.uid || 'user-default',
-      email: firebaseUser?.email || payload.email.trim(),
-      fullName: firebaseUser?.displayName || 'Taxpayer',
-    };
-    await AppStorage.setItem(STORAGE_KEY_USER_PROFILE, JSON.stringify(fallbackUser));
     return { user: fallbackUser, accessToken: idToken };
   }
 

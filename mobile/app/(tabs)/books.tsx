@@ -16,6 +16,11 @@ import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
 import {
+  createOptimisticId,
+  isOptimisticId,
+  runOptimisticMutation,
+} from '../../src/utils/optimistic';
+import {
   requestCameraOsPermission,
   requestFilesOsPermission,
 } from '../../src/utils/permissions';
@@ -226,53 +231,129 @@ export default function BooksScreen() {
     }
   };
 
-  /** Saves a manual expense record */
+  /** Saves a manual expense record optimistically with automatic rollback */
   const handleSaveManual = async () => {
     if (!activeBusiness?.id) return;
     const net = Number(amountInput.replace(/[^0-9.]/g, '') || 0);
     const vat = Number(vatInput.replace(/[^0-9.]/g, '') || 0);
-    if (!merchantName.trim() || net <= 0) {
+    const cleanMerchant = merchantName.trim();
+    if (!cleanMerchant || net <= 0) {
       setFeedback(
         isRTL ? 'يرجى إدخال اسم المورد والمبلغ.' : 'Merchant name and amount are required.'
       );
       return;
     }
 
+    const isEntertainment = category === 'CLIENT_ENTERTAINMENT';
+    const effectiveVat = isEntertainment ? 0 : vat;
+    const effectiveTotal = net + effectiveVat;
+    const tempId = createOptimisticId('exp');
+
+    // Construct an immediate client-side ledger entry for zero-latency UI response
+    const optimisticExpense = {
+      id: tempId,
+      businessId: activeBusiness.id,
+      merchantName: cleanMerchant,
+      expenseDate,
+      netAmountAED: net,
+      vatAmountAED: effectiveVat,
+      totalAmountAED: effectiveTotal,
+      category,
+      status: 'PENDING',
+    };
+
+    // Capture current inputs to restore cleanly if the backend rejects the mutation
+    const draftSnapshot = {
+      merchant: merchantName,
+      amount: amountInput,
+      vat: vatInput,
+      date: expenseDate,
+      cat: category,
+    };
+
+    setFeedback(null);
     setManualSaving(true);
-    try {
-      const isEntertainment = category === 'CLIENT_ENTERTAINMENT';
-      await MizanApi.createManualExpense({
-        businessId: activeBusiness.id,
-        merchantName: merchantName.trim(),
-        expenseDate,
-        netAmountAED: net,
-        vatAmountAED: isEntertainment ? 0 : vat,
-        totalAmountAED: net + (isEntertainment ? 0 : vat),
-        category,
-      });
-      setManualOpen(false);
-      setMerchantName('');
-      setAmountInput('');
-      setVatInput('');
-      await loadBooks();
-    } catch (err: any) {
-      setFeedback(err?.message || (isRTL ? 'تعذر حفظ المصروف.' : 'Failed to save expense.'));
-    } finally {
-      setManualSaving(false);
-    }
+
+    await runOptimisticMutation({
+      // Snapshot full list + hero totals before applying optimistic changes
+      snapshot: () => ({
+        expenses,
+        totalSpendAED,
+        recoverableVatAED,
+      }),
+      // Close the sheet and show the new entry in the ledger immediately
+      apply: () => {
+        setManualOpen(false);
+        setMerchantName('');
+        setAmountInput('');
+        setVatInput('');
+        setExpenses((prev) => [optimisticExpense, ...prev]);
+        setTotalSpendAED((prev) => prev + effectiveTotal);
+        setRecoverableVatAED((prev) => prev + effectiveVat);
+      },
+      // Commit to Cloud Run / PostgreSQL in the background
+      commit: () =>
+        MizanApi.createManualExpense({
+          businessId: activeBusiness.id,
+          merchantName: cleanMerchant,
+          expenseDate,
+          netAmountAED: net,
+          vatAmountAED: effectiveVat,
+          totalAmountAED: effectiveTotal,
+          category,
+        }),
+      // Replace temporary entry with canonical server ID and exact backend VAT math
+      onSuccess: () => loadBooks(),
+      // Revert ledger, hero totals, and draft inputs if backend save fails
+      rollback: (prev) => {
+        setExpenses(prev.expenses);
+        setTotalSpendAED(prev.totalSpendAED);
+        setRecoverableVatAED(prev.recoverableVatAED);
+        setMerchantName(draftSnapshot.merchant);
+        setAmountInput(draftSnapshot.amount);
+        setVatInput(draftSnapshot.vat);
+        setExpenseDate(draftSnapshot.date);
+        setCategory(draftSnapshot.cat);
+      },
+      onError: (msg) => setFeedback(msg),
+      isRTL,
+      fallbackEn: 'Failed to save expense.',
+      fallbackAr: 'تعذر حفظ المصروف.',
+    });
+
+    setManualSaving(false);
   };
 
-  /** Approves a pending expense into the ledger */
+  /** Approves a pending expense optimistically into the ledger */
   const handleApprove = async (id: string) => {
+    // Guard against acting on an uncommitted client-generated placeholder ID
+    if (isOptimisticId(id)) return;
+
+    setFeedback(null);
     setBusyAction(id);
-    try {
-      await MizanApi.approveExpense(id);
-      await loadBooks();
-    } catch (err: any) {
-      setFeedback(err?.message || (isRTL ? 'تعذر اعتماد المصروف.' : 'Failed to approve expense.'));
-    } finally {
-      setBusyAction(null);
-    }
+
+    await runOptimisticMutation({
+      // Save exact ledger list prior to status mutation
+      snapshot: () => expenses,
+      // Flip status to APPROVED immediately in memory
+      apply: () => {
+        setExpenses((prev) =>
+          prev.map((item) => (item.id === id ? { ...item, status: 'APPROVED' } : item))
+        );
+      },
+      commit: () => MizanApi.approveExpense(id),
+      // Reconcile server-computed totals and audit fields asynchronously
+      onSuccess: () => loadBooks(),
+      rollback: (prevExpenses) => {
+        setExpenses(prevExpenses);
+      },
+      onError: (msg) => setFeedback(msg),
+      isRTL,
+      fallbackEn: 'Failed to approve expense.',
+      fallbackAr: 'تعذر اعتماد المصروف.',
+    });
+
+    setBusyAction(null);
   };
 
   return (
@@ -446,6 +527,7 @@ export default function BooksScreen() {
           filteredExpenses.map((item) => {
             const status = (item.status || 'PENDING').toUpperCase();
             const isApproved = status === 'APPROVED';
+            const isPendingSync = isOptimisticId(item.id);
             const total = item.totalAmountAED ?? item.totalAmount ?? item.amount ?? 0;
             const vat = item.vatAmountAED ?? item.vatAmount ?? 0;
 
@@ -473,7 +555,7 @@ export default function BooksScreen() {
 
                 <View style={[styles.expFooter, { borderTopColor: colors.neutral.border }]}>
                   <Badge
-                    label={status}
+                    label={isPendingSync ? (isRTL ? 'جاري المزامنة' : 'SYNCING') : status}
                     variant={isApproved ? 'solid' : 'outline'}
                   />
                   {!isApproved ? (
@@ -482,6 +564,7 @@ export default function BooksScreen() {
                       variant="primary"
                       size="md"
                       fullWidth={false}
+                      disabled={isPendingSync}
                       loading={busyAction === item.id}
                       onPress={() => handleApprove(item.id)}
                     />

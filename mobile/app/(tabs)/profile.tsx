@@ -13,6 +13,7 @@ import { useBusiness } from '../../src/context/BusinessContext';
 import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { AppPreferences } from '../../src/utils/preferences';
+import { runOptimisticMutation } from '../../src/utils/optimistic';
 import { borders, radii, spacing, ThemeMode } from '../../src/theme/tokens';
 import { AppText, Badge, Button, Card, ModalSheet, TextField } from '../../src/ui';
 
@@ -77,34 +78,71 @@ export default function ProfileScreen() {
     setEditOpen(true);
   };
 
+  /** Saves user identity changes optimistically and closes sheet at 0ms */
   const handleSaveProfile = async () => {
+    const trimmedFull = fullName.trim();
+    const trimmedUser = username.trim();
+    const trimmedOrg = orgName.trim();
+    const previousDraft = {
+      fullName: currentUser?.fullName || '',
+      username: currentUser?.username || '',
+      orgName: currentUser?.organisationName || '',
+    };
+
     setSavingProfile(true);
     setFeedback(null);
+
+    await runOptimisticMutation({
+      // Snapshot prior field values in case storage/sync fails
+      snapshot: () => previousDraft,
+      // Dismiss edit modal immediately and display confirmation feedback
+      apply: () => {
+        setEditOpen(false);
+        setFeedback(isRTL ? 'تم تحديث الملف الشخصي.' : 'Profile updated.');
+      },
+      // Persist to BusinessContext, AsyncStorage, Firebase Auth, and Firestore
+      commit: () =>
+        updateUserProfile({
+          fullName: trimmedFull || undefined,
+          username: trimmedUser || undefined,
+          organisationName: trimmedOrg || undefined,
+        }),
+      rollback: (prev) => {
+        setFullName(prev.fullName);
+        setUsername(prev.username);
+        setOrgName(prev.orgName);
+      },
+      onError: (msg) => setFeedback(msg),
+      isRTL,
+      fallbackEn: 'Failed to update profile.',
+      fallbackAr: 'تعذر تحديث الملف الشخصي.',
+    });
+
+    setSavingProfile(false);
+  };
+
+  /** Toggles haptic feedback immediately with error rollback */
+  const handleToggleHaptics = async () => {
+    const previous = hapticsEnabled;
+    const next = !previous;
+    setHapticsEnabled(next);
     try {
-      await updateUserProfile({
-        fullName: fullName.trim() || undefined,
-        username: username.trim() || undefined,
-        organisationName: orgName.trim() || undefined,
-      });
-      setEditOpen(false);
-      setFeedback(isRTL ? 'تم تحديث الملف الشخصي.' : 'Profile updated.');
-    } catch (err: any) {
-      setFeedback(err?.message || 'Failed to update profile.');
-    } finally {
-      setSavingProfile(false);
+      await AppPreferences.update({ hapticsEnabled: next });
+    } catch {
+      setHapticsEnabled(previous);
     }
   };
 
-  const handleToggleHaptics = async () => {
-    const next = !hapticsEnabled;
-    setHapticsEnabled(next);
-    await AppPreferences.update({ hapticsEnabled: next });
-  };
-
+  /** Toggles receipt camera shutter audio immediately with error rollback */
   const handleToggleShutter = async () => {
-    const next = !shutterEnabled;
+    const previous = shutterEnabled;
+    const next = !previous;
     setShutterEnabled(next);
-    await AppPreferences.update({ shutterSoundEnabled: next });
+    try {
+      await AppPreferences.update({ shutterSoundEnabled: next });
+    } catch {
+      setShutterEnabled(previous);
+    }
   };
 
   const handleDeleteActiveBusiness = async () => {

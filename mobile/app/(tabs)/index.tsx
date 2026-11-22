@@ -14,7 +14,11 @@ import { useBusiness } from '../../src/context/BusinessContext';
 import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
+import { AppStorage } from '../../src/utils/storage';
 import { borders, radii, spacing } from '../../src/theme/tokens';
+
+// Per-entity AsyncStorage cache key prefix for instant Stale-While-Revalidate hydration
+const DASHBOARD_CACHE_PREFIX = 'mizan_dash_cache_';
 import { AppText, Badge, Button, Card, ModalSheet } from '../../src/ui';
 
 interface DashboardState {
@@ -93,7 +97,7 @@ export default function DashboardScreen() {
       const tax = overview?.tax || {};
       const nextItem = calendar[0] || null;
 
-      setData({
+      const nextState: DashboardState = {
         readinessScore: overview?.readiness?.overallScore ?? 85,
         netProfitAED: financials.netAccountingProfitAED ?? '0',
         revenueAED: financials.totalRevenueAED ?? '0',
@@ -114,10 +118,50 @@ export default function DashboardScreen() {
           status: a.status || 'OPEN',
         })),
         synced: overviewRes.status === 'fulfilled',
-      });
+      };
+
+      setData(nextState);
+
+      // Persist fresh overview per businessId so subsequent mounts render at 0ms
+      if (overviewRes.status === 'fulfilled') {
+        AppStorage.setItem(
+          `${DASHBOARD_CACHE_PREFIX}${activeBusiness.id}`,
+          JSON.stringify(nextState)
+        ).catch(() => {});
+      }
     } finally {
       setRefreshing(false);
     }
+  }, [activeBusiness?.id]);
+
+  // Hydrate cached KPI snapshot immediately on mount or entity switch (Stale-While-Revalidate)
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeBusiness?.id) {
+      setData(DEFAULT_DASHBOARD);
+      return;
+    }
+
+    (async () => {
+      try {
+        const cachedRaw = await AppStorage.getItem(
+          `${DASHBOARD_CACHE_PREFIX}${activeBusiness.id}`
+        );
+        if (cancelled) return;
+        if (cachedRaw) {
+          setData(JSON.parse(cachedRaw));
+        } else {
+          // Reset cleanly when switching to an entity with no prior local cache
+          setData(DEFAULT_DASHBOARD);
+        }
+      } catch {
+        if (!cancelled) setData(DEFAULT_DASHBOARD);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeBusiness?.id]);
 
   useEffect(() => {

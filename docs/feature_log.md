@@ -40,6 +40,7 @@ graph TD
         TYPO[FEAT-UI-02: Modernist Neo-Khaleeji Typography Engine]
         SMOOTH_MODAL[FEAT-UI-03: Reanimated v4 Motion & Smooth Navigation Engine]
         THEME[FEAT-UI-04: Adaptive Dark Theme Engine]
+        OPTIMISTIC[FEAT-UI-05: Optimistic UI & SWR Cache Engine]
     end
 
     AUTH --> GUARD
@@ -87,6 +88,11 @@ graph TD
     THEME --> SKELETON
     THEME --> CT_COUNTDOWN
     THEME --> AI_ASST
+    OPTIMISTIC --> AUTH
+    OPTIMISTIC --> DASH
+    OPTIMISTIC --> INVOICE
+    OPTIMISTIC --> OCR_EXP
+    OPTIMISTIC --> USER_EDIT
 ```
 
 ### Dependency Audit

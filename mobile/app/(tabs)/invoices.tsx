@@ -18,6 +18,11 @@ import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
 import { VisionOcr } from '../../src/services/visionOcr';
 import { requestCameraOsPermission } from '../../src/utils/permissions';
+import {
+  createOptimisticId,
+  isOptimisticId,
+  runOptimisticMutation,
+} from '../../src/utils/optimistic';
 import { borders, radii, spacing } from '../../src/theme/tokens';
 import { AppText, Badge, Button, Card, ModalSheet, TextField } from '../../src/ui';
 
@@ -135,7 +140,7 @@ export default function InvoicesScreen() {
     }
   };
 
-  /** Creates customer (if needed) and saves a new draft invoice */
+  /** Creates customer (if needed) and saves a new draft invoice optimistically */
   const handleCreateInvoice = async () => {
     if (!activeBusiness?.id) return;
     setFeedback(null);
@@ -162,83 +167,156 @@ export default function InvoicesScreen() {
       return;
     }
 
+    // Compute immediate client-side VAT & invoice totals matching UAE 5% / 0% rules
+    const subtotal = price * qty;
+    const vatAmount = vatTreatment === 'STANDARD_5' ? subtotal * 0.05 : 0;
+    const totalAmount = subtotal + vatAmount;
+    const due = new Date(issueDate || Date.now());
+    due.setDate(due.getDate() + 14);
+    const dueDateStr = due.toISOString().split('T')[0];
+
+    const optimisticInvoice = {
+      id: createOptimisticId('inv'),
+      businessId: activeBusiness.id,
+      customerName: trimmedCustomer,
+      customer: { name: trimmedCustomer, trn: cleanTrn || undefined },
+      invoiceNumber: 'DRAFT',
+      issueDate,
+      dueDate: dueDateStr,
+      totalAmountAED: totalAmount,
+      vatAmountAED: vatAmount,
+      status: 'DRAFT',
+    };
+
+    const formSnapshot = {
+      customerName,
+      customerTrn,
+      unitPrice,
+      quantity,
+      description,
+    };
+
     setSaving(true);
-    try {
-      // Reuse existing customer by name or create a new CORPORATE customer
-      const existingCustomers = await MizanApi.getCustomers(activeBusiness.id).catch(() => []);
-      const match = existingCustomers.find(
-        (c: any) => (c.name || '').toLowerCase() === trimmedCustomer.toLowerCase()
-      );
 
-      const customer =
-        match ||
-        (await MizanApi.createCustomer(activeBusiness.id, {
-          name: trimmedCustomer,
-          customerType: 'CORPORATE',
-          billingAddress: 'Dubai, United Arab Emirates',
-          ...(cleanTrn ? { trn: cleanTrn } : {}),
-        }));
+    await runOptimisticMutation({
+      // Save current invoice list prior to prepending optimistic draft
+      snapshot: () => invoices,
+      // Dismiss sheet cleanly and prepend new DRAFT invoice immediately
+      apply: () => {
+        setCreateOpen(false);
+        setCustomerName('');
+        setCustomerTrn('');
+        setUnitPrice('');
+        setInvoices((prev) => [optimisticInvoice, ...prev]);
+      },
+      // Resolve or create customer, then persist draft invoice on Cloud Run
+      commit: async () => {
+        const existingCustomers = await MizanApi.getCustomers(activeBusiness.id).catch(() => []);
+        const match = existingCustomers.find(
+          (c: any) => (c.name || '').toLowerCase() === trimmedCustomer.toLowerCase()
+        );
 
-      // Default dueDate = issueDate + 14 days
-      const due = new Date(issueDate || Date.now());
-      due.setDate(due.getDate() + 14);
-      const dueDateStr = due.toISOString().split('T')[0];
+        const customer =
+          match ||
+          (await MizanApi.createCustomer(activeBusiness.id, {
+            name: trimmedCustomer,
+            customerType: 'CORPORATE',
+            billingAddress: 'Dubai, United Arab Emirates',
+            ...(cleanTrn ? { trn: cleanTrn } : {}),
+          }));
 
-      await MizanApi.createDraftInvoice({
-        businessId: activeBusiness.id,
-        customerId: customer.id,
-        issueDate,
-        dueDate: dueDateStr,
-        currency: 'AED',
-        lines: [
-          {
-            description: description.trim() || 'Services',
-            quantity: qty,
-            unitPrice: price,
-            vatTreatment,
-          },
-        ],
-      });
+        return MizanApi.createDraftInvoice({
+          businessId: activeBusiness.id,
+          customerId: customer.id,
+          issueDate,
+          dueDate: dueDateStr,
+          currency: 'AED',
+          lines: [
+            {
+              description: description.trim() || 'Services',
+              quantity: qty,
+              unitPrice: price,
+              vatTreatment,
+            },
+          ],
+        });
+      },
+      // Reconcile server-assigned UUID and sequential invoice number metadata
+      onSuccess: () => loadInvoices(),
+      // Revert optimistic invoice and restore form inputs if creation fails
+      rollback: (prevInvoices) => {
+        setInvoices(prevInvoices);
+        setCustomerName(formSnapshot.customerName);
+        setCustomerTrn(formSnapshot.customerTrn);
+        setUnitPrice(formSnapshot.unitPrice);
+        setQuantity(formSnapshot.quantity);
+        setDescription(formSnapshot.description);
+      },
+      onError: (msg) => setFeedback(msg),
+      isRTL,
+      fallbackEn: 'Failed to create invoice.',
+      fallbackAr: 'تعذر إنشاء الفاتورة.',
+    });
 
-      setCreateOpen(false);
-      setCustomerName('');
-      setCustomerTrn('');
-      setUnitPrice('');
-      await loadInvoices();
-    } catch (err: any) {
-      setFeedback(
-        err?.message || (isRTL ? 'تعذر إنشاء الفاتورة.' : 'Failed to create invoice.')
-      );
-    } finally {
-      setSaving(false);
-    }
+    setSaving(false);
   };
 
-  /** Issues a draft invoice (locks sequential number) */
+  /** Issues a draft invoice optimistically (locks sequential number on server) */
   const handleIssue = async (id: string) => {
+    if (isOptimisticId(id)) return;
+    setFeedback(null);
     setBusyId(id);
-    try {
-      await MizanApi.issueInvoice(id);
-      await loadInvoices();
-    } catch (err: any) {
-      setFeedback(err?.message || 'Failed to issue invoice.');
-    } finally {
-      setBusyId(null);
-    }
+
+    await runOptimisticMutation({
+      snapshot: () => invoices,
+      apply: () => {
+        setInvoices((prev) =>
+          prev.map((inv) => (inv.id === id ? { ...inv, status: 'ISSUED' } : inv))
+        );
+      },
+      commit: () => MizanApi.issueInvoice(id),
+      // Pull sequential tax invoice number generated by the backend
+      onSuccess: () => loadInvoices(),
+      rollback: (prevInvoices) => {
+        setInvoices(prevInvoices);
+      },
+      onError: (msg) => setFeedback(msg),
+      isRTL,
+      fallbackEn: 'Failed to issue invoice.',
+      fallbackAr: 'تعذر إصدار الفاتورة.',
+    });
+
+    setBusyId(null);
   };
 
-  /** Records full payment against an issued invoice */
+  /** Records full payment against an issued invoice optimistically */
   const handleMarkPaid = async (inv: any) => {
+    if (isOptimisticId(inv.id)) return;
+    setFeedback(null);
     setBusyId(inv.id);
-    try {
-      const amount = Number(inv.totalAmountAED ?? inv.totalAmount ?? 0);
-      await MizanApi.recordInvoicePayment(inv.id, amount);
-      await loadInvoices();
-    } catch (err: any) {
-      setFeedback(err?.message || 'Failed to record payment.');
-    } finally {
-      setBusyId(null);
-    }
+
+    await runOptimisticMutation({
+      snapshot: () => invoices,
+      apply: () => {
+        setInvoices((prev) =>
+          prev.map((item) => (item.id === inv.id ? { ...item, status: 'PAID' } : item))
+        );
+      },
+      commit: () => {
+        const amount = Number(inv.totalAmountAED ?? inv.totalAmount ?? 0);
+        return MizanApi.recordInvoicePayment(inv.id, amount);
+      },
+      onSuccess: () => loadInvoices(),
+      rollback: (prevInvoices) => {
+        setInvoices(prevInvoices);
+      },
+      onError: (msg) => setFeedback(msg),
+      isRTL,
+      fallbackEn: 'Failed to record payment.',
+      fallbackAr: 'تعذر تسجيل الدفعة.',
+    });
+
+    setBusyId(null);
   };
 
   /** Exports bilingual invoice PDF */
@@ -386,6 +464,7 @@ export default function InvoicesScreen() {
         ) : (
           filteredInvoices.map((inv) => {
             const status = (inv.status || 'DRAFT').toUpperCase();
+            const isPendingSync = isOptimisticId(inv.id);
             const total = inv.totalAmountAED ?? inv.totalAmount ?? 0;
             const vat = inv.vatAmountAED ?? inv.taxAmount ?? 0;
             const number = inv.invoiceNumber || 'DRAFT';
@@ -414,7 +493,7 @@ export default function InvoicesScreen() {
 
                 <View style={[styles.invFooter, { borderTopColor: colors.neutral.border }]}>
                   <Badge
-                    label={status}
+                    label={isPendingSync ? (isRTL ? 'جاري المزامنة' : 'SYNCING') : status}
                     variant={status === 'PAID' ? 'solid' : status === 'ISSUED' ? 'outline' : 'muted'}
                   />
                   <View style={styles.invActions}>
@@ -423,6 +502,7 @@ export default function InvoicesScreen() {
                       variant="outline"
                       size="md"
                       fullWidth={false}
+                      disabled={isPendingSync}
                       loading={busyId === inv.id}
                       onPress={() => handleExportPdf(inv.id)}
                     />
@@ -432,6 +512,7 @@ export default function InvoicesScreen() {
                         variant="primary"
                         size="md"
                         fullWidth={false}
+                        disabled={isPendingSync}
                         loading={busyId === inv.id}
                         onPress={() => handleIssue(inv.id)}
                       />
@@ -442,6 +523,7 @@ export default function InvoicesScreen() {
                         variant="primary"
                         size="md"
                         fullWidth={false}
+                        disabled={isPendingSync}
                         loading={busyId === inv.id}
                         onPress={() => handleMarkPaid(inv)}
                       />
