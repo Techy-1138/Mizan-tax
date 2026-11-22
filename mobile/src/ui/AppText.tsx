@@ -9,6 +9,7 @@ import { Text as RNText, TextProps as RNTextProps, TextStyle } from 'react-nativ
 import { useTheme } from '../context/ThemeContext';
 import { useLocale } from '../context/LocaleContext';
 import { getFont, getMonoFont, typeScale } from '../theme/tokens';
+import { useCardVariant } from './Card';
 
 export type TextVariant =
   | 'display'
@@ -55,6 +56,7 @@ export function AppText({
 }: AppTextProps) {
   const { colors } = useTheme();
   const { isRTL } = useLocale();
+  const cardVariant = useCardVariant();
 
   const resolvedWeight = weight ?? DEFAULT_WEIGHT[variant];
   const isDisplay = variant === 'display' || variant === 'h1' || variant === 'h2';
@@ -69,7 +71,9 @@ export function AppText({
     primary: colors.neutral.textPrimary,
     secondary: colors.neutral.textSecondary,
     muted: colors.neutral.textMuted,
-    inverted: colors.neutral.textInverted,
+    // Inside dark Hero cards (`brand.hero`), keep text crisp light (`brand.heroText`) in both themes
+    inverted:
+      cardVariant === 'inverted' ? colors.brand.heroText : colors.neutral.textInverted,
   };
 
   const scaleStyle = typeScale[variant];

@@ -4,12 +4,14 @@
 // while preserving native 1-Tap Google Sign-In in custom Dev Builds & APKs.
 // ============================================================================
 
-import { Platform, TurboModuleRegistry } from 'react-native';
+import { NativeModules, Platform, TurboModuleRegistry } from 'react-native';
 import {
   auth,
   GoogleAuthProvider,
   signInWithCredential,
 } from './firebase';
+import { API_BASE_URL, MizanApi, STORAGE_KEY_AUTH_TOKEN, STORAGE_KEY_ORG_ID } from './api';
+import { AppStorage } from '../utils/storage';
 
 // Type-only reference preserves strict TypeScript validation without triggering
 // the package's top-level TurboModuleRegistry.getEnforcing('RNGoogleSignin') call.
@@ -28,7 +30,9 @@ let isConfigured = false;
  */
 export function isGoogleSignInSupported(): boolean {
   if (Platform.OS === 'web') return false;
-  return TurboModuleRegistry.get('RNGoogleSignin') != null;
+  return Boolean(
+    NativeModules?.RNGoogleSignin || TurboModuleRegistry.get('RNGoogleSignin')
+  );
 }
 
 /**
@@ -108,7 +112,31 @@ export async function performGoogleSignIn(isRTL: boolean): Promise<GoogleSignInO
 
     // Exchange native Google ID token for an authenticated Firebase user session
     const credential = GoogleAuthProvider.credential(idToken);
-    await signInWithCredential(auth, credential);
+    const userCred = await signInWithCredential(auth, credential);
+
+    // Immediately cache Firebase ID token and synchronize user/organisation with Cloud Run
+    const firebaseToken = await userCred.user.getIdToken();
+    MizanApi.setAuthToken(firebaseToken);
+    await AppStorage.setItem(STORAGE_KEY_AUTH_TOKEN, firebaseToken);
+    try {
+      const syncRes = await fetch(`${API_BASE_URL}/api/v1/auth/sync`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${firebaseToken}`,
+        },
+      });
+      if (syncRes.ok) {
+        const data = await syncRes.json();
+        if (data.activeOrganisation?.id) {
+          MizanApi.setAuthToken(firebaseToken, data.activeOrganisation.id);
+          await AppStorage.setItem(STORAGE_KEY_ORG_ID, data.activeOrganisation.id);
+        }
+      }
+    } catch {
+      // Non-fatal: Firebase Auth session is valid and backend falls back cleanly
+    }
+
     return { status: 'success' };
   } catch (error: any) {
     const codes = mod.statusCodes;

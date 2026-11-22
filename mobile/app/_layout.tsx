@@ -1,8 +1,8 @@
 // ============================================================================
-// Mizan (ميزان) - Root Expo Router Layout
+// Mizan (ميزان) - Root Expo Router Layout (With Direction-Aware Smooth Stack)
 // Preloads bundled EN (Outfit/DM Sans), AR (Cairo), and Mono (DM Mono) fonts
 // and wraps the app in QueryClientProvider, ThemeProvider, LocaleProvider,
-// and BusinessProvider.
+// and BusinessProvider with RTL-aware stack animations.
 // ============================================================================
 
 import React, { useState } from 'react';
@@ -13,15 +13,18 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useFonts } from 'expo-font';
 import { ThemeProvider, useTheme } from '../src/context/ThemeContext';
-import { LocaleProvider } from '../src/context/LocaleContext';
+import { LocaleProvider, useLocale } from '../src/context/LocaleContext';
 import { BusinessProvider } from '../src/context/BusinessContext';
 import { fontNames } from '../src/theme/tokens';
 
 /**
- * Inner navigation shell consuming active monochrome theme for StatusBar & canvas.
+ * Inner navigation shell consuming active monochrome theme and locale direction
+ * so Stack transitions slide naturally in both English LTR and Arabic RTL.
  */
 function ThemedShell() {
   const { colors, isDark } = useTheme();
+  const { isRTL } = useLocale();
+  const slideAnimation = isRTL ? 'slide_from_left' : 'slide_from_right';
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.neutral.canvas }}>
@@ -29,18 +32,23 @@ function ThemedShell() {
       <Stack
         screenOptions={{
           headerShown: false,
-          animation: 'slide_from_right',
+          animation: slideAnimation,
+          animationDuration: 240,
+          gestureEnabled: true,
           contentStyle: { backgroundColor: colors.neutral.canvas },
         }}
       >
         <Stack.Screen name="index" options={{ animation: 'fade' }} />
         <Stack.Screen name="auth/login" options={{ animation: 'fade' }} />
-        <Stack.Screen name="auth/register" />
-        <Stack.Screen name="onboarding/business" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="auth/register" options={{ animation: slideAnimation }} />
+        <Stack.Screen
+          name="onboarding/business"
+          options={{ animation: slideAnimation, gestureEnabled: false }}
+        />
         <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
-        <Stack.Screen name="learn/chat" />
-        <Stack.Screen name="reports/index" />
-        <Stack.Screen name="readiness/index" />
+        <Stack.Screen name="learn/chat" options={{ animation: slideAnimation }} />
+        <Stack.Screen name="reports/index" options={{ animation: slideAnimation }} />
+        <Stack.Screen name="readiness/index" options={{ animation: slideAnimation }} />
       </Stack>
     </GestureHandlerRootView>
   );

@@ -212,23 +212,9 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setBusinesses(mapped);
         await AppStorage.setItem(STORAGE_KEY_CACHED_BUSINESSES, JSON.stringify(mapped));
       } else {
-        const cachedStr = await AppStorage.getItem(STORAGE_KEY_CACHED_BUSINESSES);
-        if (cachedStr) {
-          try {
-            const cachedList = JSON.parse(cachedStr);
-            if (Array.isArray(cachedList) && cachedList.length > 0) {
-              setBusinesses(cachedList);
-              const activeId = cachedList[0]?.id;
-              if (activeId) {
-                setActiveBusinessIdState(activeId);
-                await AppStorage.setItem(STORAGE_KEY_ACTIVE_BIZ, activeId);
-              }
-              setIsLoading(false);
-              return;
-            }
-          } catch {}
-        }
+        // Fresh account or deleted entities: clear stale cache rather than resurrecting old entities
         setBusinesses([]);
+        await AppStorage.removeItem(STORAGE_KEY_CACHED_BUSINESSES);
       }
 
       // Restore or validate active business

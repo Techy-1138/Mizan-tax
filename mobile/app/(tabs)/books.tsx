@@ -16,6 +16,10 @@ import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
 import {
+  requestCameraOsPermission,
+  requestFilesOsPermission,
+} from '../../src/utils/permissions';
+import {
   BankStatementParseResult,
   parseBankStatementCsv,
 } from '../../src/utils/bankStatementParser';
@@ -120,7 +124,7 @@ export default function BooksScreen() {
   const handleScanReceipt = async () => {
     if (!activeBusiness?.id) return;
     setFeedback(null);
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    const perm = await requestCameraOsPermission();
     if (!perm.granted) {
       setFeedback(
         isRTL
@@ -157,6 +161,15 @@ export default function BooksScreen() {
   /** Picks and parses a UAE bank CSV statement deterministically */
   const handlePickBankCsv = async () => {
     setFeedback(null);
+    const perm = await requestFilesOsPermission();
+    if (!perm.granted) {
+      setFeedback(
+        isRTL
+          ? 'تم رفض إذن الوصول إلى الملفات. اسمح بالوصول من الإعدادات.'
+          : 'Files/Media permission denied. Allow access in Settings.'
+      );
+      return;
+    }
     const doc = await DocumentPicker.getDocumentAsync({
       type: ['text/csv', 'text/comma-separated-values', 'text/plain', '*/*'],
       copyToCacheDirectory: true,

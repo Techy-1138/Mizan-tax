@@ -14,7 +14,7 @@ import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
 import { borders, radii, spacing } from '../../src/theme/tokens';
-import { AppText, Badge, Button, Card, ModalSheet } from '../../src/ui';
+import { AppText, Badge, Button, Card, ModalSheet, SlideIn } from '../../src/ui';
 
 type TaxRegime = 'CORPORATE_TAX' | 'VAT';
 
@@ -231,7 +231,7 @@ export default function TaxCenterScreen() {
                   ? 'إقرار ضريبة القيمة المضافة 201'
                   : 'VAT 201 RETURN · Q4 2026'}
             </AppText>
-            <View style={[styles.heroBadge, { borderColor: colors.neutral.textInverted }]}>
+            <View style={[styles.heroBadge, { borderColor: colors.brand.heroText }]}>
               <AppText variant="caption" weight="semiBold" tone="inverted">
                 {regime === 'CORPORATE_TAX' ? 'FDL 47/2022' : 'FDL 8/2017'}
               </AppText>
@@ -254,14 +254,10 @@ export default function TaxCenterScreen() {
 
           <Button
             label={isRTL ? 'تشغيل التقييم الضريبي' : 'Run Assessment'}
-            variant="outline"
+            variant="onHero"
             loading={running}
             onPress={handleRunAssessment}
-            style={{
-              backgroundColor: colors.neutral.textInverted,
-              borderColor: colors.neutral.textInverted,
-              marginTop: spacing.xs,
-            }}
+            style={{ marginTop: spacing.xs }}
           />
         </Card>
 
@@ -283,6 +279,7 @@ export default function TaxCenterScreen() {
         ) : null}
 
         {/* Statutory Breakdown Card */}
+        <SlideIn key={regime} from="bottom" distance={10}>
         <Card style={styles.card}>
           <AppText variant="caption" weight="semiBold" tone="secondary">
             {isRTL ? 'تفاصيل الاحتساب' : 'CALCULATION BREAKDOWN'}
@@ -344,6 +341,7 @@ export default function TaxCenterScreen() {
             </>
           )}
         </Card>
+        </SlideIn>
 
         {/* Historical Assessments */}
         <Card style={styles.card}>

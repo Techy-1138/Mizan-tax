@@ -168,7 +168,7 @@ export default function DashboardScreen() {
               <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
                 {isRTL ? 'مؤشر الجاهزية الضريبية' : 'TAX READINESS SCORE'}
               </AppText>
-              <View style={[styles.heroBadge, { borderColor: colors.neutral.textInverted }]}>
+              <View style={[styles.heroBadge, { borderColor: colors.brand.heroText }]}>
                 <AppText variant="caption" weight="semiBold" tone="inverted" tabular>
                   {data.readinessScore} / 100
                 </AppText>

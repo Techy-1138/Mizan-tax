@@ -8,9 +8,11 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MizanApi } from '../../src/services/api';
-import { isGoogleSignInSupported, performGoogleSignIn } from '../../src/services/googleAuth';
+import { performGoogleSignIn } from '../../src/services/googleAuth';
+import { getFriendlyErrorMessage } from '../../src/utils/errorMessages';
 import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
+import { useBusiness } from '../../src/context/BusinessContext';
 import { borders, radii, spacing } from '../../src/theme/tokens';
 import { AppText, Button, Card, Screen, TextField } from '../../src/ui';
 
@@ -27,33 +29,13 @@ function getPasswordStrength(value: string): 0 | 1 | 2 | 3 {
 }
 
 /**
- * Translates common Firebase Auth error codes into user-friendly EN/AR copy.
- */
-function formatAuthError(err: any, isRTL: boolean): string {
-  const code = err?.code || '';
-  if (code === 'auth/email-already-in-use') {
-    return isRTL
-      ? 'هذا البريد الإلكتروني مسجل بالفعل. يمكنك تسجيل الدخول.'
-      : 'This email is already registered. Try signing in instead.';
-  }
-  if (code === 'auth/weak-password') {
-    return isRTL
-      ? 'كلمة المرور ضعيفة جداً. استخدم 8 أحرف على الأقل.'
-      : 'Password is too weak. Use at least 8 characters.';
-  }
-  return (
-    err?.message ||
-    (isRTL ? 'تعذر إنشاء الحساب. يرجى المحاولة مرة أخرى.' : 'Registration failed. Please try again.')
-  );
-}
-
-/**
  * Monochrome Create Account screen supporting EN/AR RTL and Light/Dark modes.
  */
 export default function RegisterScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { isRTL, toggleLocale } = useLocale();
+  const { refreshBusinesses } = useBusiness();
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -66,7 +48,6 @@ export default function RegisterScreen() {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const googleSupported = isGoogleSignInSupported();
   const strength = useMemo(() => getPasswordStrength(password), [password]);
 
   const strengthLabel = useMemo(() => {
@@ -114,7 +95,14 @@ export default function RegisterScreen() {
       });
       router.replace('/onboarding/business');
     } catch (err: any) {
-      setFormError(formatAuthError(err, isRTL));
+      setFormError(
+        getFriendlyErrorMessage(
+          err,
+          isRTL,
+          'Registration failed. Please try again.',
+          'تعذر إنشاء الحساب. يرجى المحاولة مرة أخرى.'
+        )
+      );
     } finally {
       setLoading(false);
     }
@@ -128,6 +116,7 @@ export default function RegisterScreen() {
       const outcome = await performGoogleSignIn(isRTL);
       if (outcome.status === 'success') {
         try {
+          await refreshBusinesses();
           const businesses = await MizanApi.getBusinesses();
           if (Array.isArray(businesses) && businesses.length > 0) {
             router.replace('/(tabs)');
@@ -299,7 +288,7 @@ export default function RegisterScreen() {
             ]}
           >
             <AppText variant="bodySmall" weight="semiBold">
-              ! {formError}
+              {formError}
             </AppText>
           </View>
         ) : null}
@@ -315,15 +304,13 @@ export default function RegisterScreen() {
       </Card>
 
       {/* Google Sign-Up Section */}
-      {googleSupported ? (
-        <Button
-          label={isRTL ? 'التسجيل عبر Google' : 'Sign up with Google'}
-          variant="outline"
-          loading={googleLoading}
-          disabled={loading}
-          onPress={handleGoogleSignUp}
-        />
-      ) : null}
+      <Button
+        label={isRTL ? 'التسجيل عبر Google' : 'Sign up with Google'}
+        variant="outline"
+        loading={googleLoading}
+        disabled={loading}
+        onPress={handleGoogleSignUp}
+      />
 
       {/* Sign In Footer */}
       <View style={styles.footerRow}>

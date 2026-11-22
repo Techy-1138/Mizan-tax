@@ -23,8 +23,8 @@ const getBaseUrl = (): string => {
   if (process.env.EXPO_PUBLIC_API_URL) {
     return process.env.EXPO_PUBLIC_API_URL;
   }
-  // Production cloud API on Render (accessible by real Android devices and emulators)
-  return 'https://mizan-api-jpen.onrender.com';
+  // Production cloud API on Google Cloud Run (accessible by real Android devices and emulators)
+  return 'https://mizan-tax-896203643840.europe-west1.run.app';
 };
 
 export const API_BASE_URL = getBaseUrl();
@@ -270,6 +270,7 @@ export class MizanApi {
     await AppStorage.removeItem(STORAGE_KEY_ORG_ID);
     await AppStorage.removeItem(STORAGE_KEY_USER_PROFILE);
     await AppStorage.removeItem('mizan_active_business_id');
+    await AppStorage.removeItem('mizan_cached_businesses');
   }
 
   public static async getProfile(): Promise<any> {
@@ -390,37 +391,66 @@ export class MizanApi {
    * with seamless fallback to backend API if needed
    */
   public static async saveTradeLicense(payload: SaveTradeLicensePayload): Promise<any> {
-    // If Firebase Auth session is active, write directly to Cloud Firestore
-    if (auth.currentUser) {
-      try {
-        const { FirestoreService } = require('./firestore.service');
-        const saved = await FirestoreService.saveBusiness(payload);
-        return saved;
-      } catch (err: any) {
-        console.warn('Firestore direct write failed, attempting backend fallback:', err.message);
+    try {
+      await this.ensureAuthenticated();
+      const res = await fetch(`${API_BASE_URL}/api/v1/businesses`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || `Failed to save trade license (HTTP ${res.status})`);
       }
+
+      const saved = await res.json();
+
+      // Best-effort mirror to Cloud Firestore when Firebase session is active
+      if (auth.currentUser) {
+        try {
+          const { FirestoreService } = require('./firestore.service');
+          await FirestoreService.saveBusiness({ ...payload, id: saved?.id });
+        } catch {
+          // Non-fatal: PostgreSQL backend is the primary source of truth
+        }
+      }
+
+      return saved;
+    } catch (backendErr: any) {
+      if (auth.currentUser) {
+        try {
+          const { FirestoreService } = require('./firestore.service');
+          return await FirestoreService.saveBusiness(payload);
+        } catch {
+          // Re-throw original backend error if Firestore fallback also fails
+        }
+      }
+      throw backendErr;
     }
-
-    await this.ensureAuthenticated();
-    const res = await fetch(`${API_BASE_URL}/api/v1/businesses`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `Failed to save trade license (HTTP ${res.status})`);
-    }
-
-    return res.json();
   }
 
   /**
-   * Lists all registered business entities for the authenticated user from Cloud Firestore
+   * Lists all registered business entities for the authenticated user.
+   * Queries Cloud Run / PostgreSQL first, falling back to Cloud Firestore if offline.
    */
   public static async getBusinesses(): Promise<any[]> {
-    // If Firebase Auth session is active, read directly from Cloud Firestore
+    try {
+      await this.ensureAuthenticated();
+      const res = await fetch(`${API_BASE_URL}/api/v1/businesses`, {
+        method: 'GET',
+        headers: this.getHeaders(),
+      });
+      if (res.ok) {
+        const list = await res.json();
+        if (Array.isArray(list)) {
+          return list;
+        }
+      }
+    } catch {
+      // Fall through to Cloud Firestore offline cache/fallback
+    }
+
     if (auth.currentUser) {
       try {
         const { FirestoreService } = require('./firestore.service');
@@ -428,24 +458,12 @@ export class MizanApi {
         if (list && list.length > 0) {
           return list;
         }
-      } catch (err: any) {
-        console.warn('Firestore read failed, attempting backend fallback:', err?.message || err);
+      } catch {
+        // Return empty list if both backend and Firestore are unreachable
       }
     }
 
-    try {
-      await this.ensureAuthenticated();
-      const res = await fetch(`${API_BASE_URL}/api/v1/businesses`, {
-        method: 'GET',
-        headers: this.getHeaders(),
-      });
-      if (!res.ok) {
-        return [];
-      }
-      return res.json();
-    } catch {
-      return [];
-    }
+    return [];
   }
 
   /**

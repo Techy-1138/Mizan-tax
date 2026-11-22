@@ -22,7 +22,7 @@ import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
 import { borders, getFont, radii, spacing, typeScale } from '../../src/theme/tokens';
-import { AppText, Badge, Button, ModalSheet } from '../../src/ui';
+import { AppText, Badge, Button, ModalSheet, SlideIn } from '../../src/ui';
 
 interface ChatMessage {
   id: string;
@@ -287,8 +287,10 @@ export default function AiTaxChatScreen() {
           {messages.map((msg) => {
             const isUser = msg.role === 'user';
             return (
-              <View
+              <SlideIn
                 key={msg.id}
+                from="bottom"
+                distance={8}
                 style={[styles.msgRow, isUser ? styles.msgRowUser : styles.msgRowAi]}
               >
                 <View
@@ -315,7 +317,7 @@ export default function AiTaxChatScreen() {
                     </View>
                   ) : null}
                 </View>
-              </View>
+              </SlideIn>
             );
           })}
 
@@ -339,7 +341,7 @@ export default function AiTaxChatScreen() {
               ]}
             >
               <AppText variant="caption" weight="semiBold">
-                ! {error}
+                {error}
               </AppText>
             </View>
           ) : null}

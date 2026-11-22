@@ -104,7 +104,7 @@ export function TextField({
 
       {hasError ? (
         <AppText variant="caption" weight="semiBold" tone="primary" style={styles.message}>
-          ! {error}
+          {error}
         </AppText>
       ) : helperText ? (
         <AppText variant="caption" tone="muted" style={styles.message}>

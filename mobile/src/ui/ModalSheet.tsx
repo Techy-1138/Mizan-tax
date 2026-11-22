@@ -1,9 +1,10 @@
 // ============================================================================
-// Mizan (ميزان) - Monochrome ModalSheet Primitive
-// Supports backdrop-tap dismissal and native hardware back / ESC dismissal.
+// Mizan (ميزان) - Monochrome ModalSheet Primitive (Reanimated Spring Sheet)
+// Independent UI-thread backdrop opacity fade + critically-damped bottom-sheet
+// slide-up/slide-down animation with ESC/back-button and backdrop click close.
 // ============================================================================
 
-import React, { ReactNode } from 'react';
+import React, { ReactNode, useEffect, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -12,8 +13,21 @@ import {
   ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, {
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import { borders, radii, spacing } from '../theme/tokens';
+import {
+  getEnterTiming,
+  getExitTiming,
+  motionDurations,
+  motionSprings,
+} from '../motion/tokens';
 import { AppText } from './AppText';
 
 export interface ModalSheetProps {
@@ -24,9 +38,12 @@ export interface ModalSheetProps {
   contentStyle?: ViewStyle;
 }
 
+const SHEET_HIDDEN_OFFSET = 340;
+const EXIT_DURATION_MS = 180;
+
 /**
- * Institutional bottom-sheet modal with 1px top border, backdrop click close,
- * and onRequestClose (Android back / hardware ESC) support.
+ * Institutional bottom-sheet modal with 1px top border, independent Reanimated
+ * backdrop fade + spring sheet slide, backdrop click close, and hardware back/ESC support.
  */
 export function ModalSheet({
   visible,
@@ -37,23 +54,80 @@ export function ModalSheet({
 }: ModalSheetProps) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const reduceMotion = useReducedMotion();
+
+  // Keep RN Modal mounted during exit animation so slide-down completes smoothly
+  const [isRendered, setIsRendered] = useState(visible);
+
+  const backdropOpacity = useSharedValue(0);
+  const sheetTranslateY = useSharedValue(SHEET_HIDDEN_OFFSET);
+
+  useEffect(() => {
+    if (visible) {
+      setIsRendered(true);
+      if (reduceMotion) {
+        backdropOpacity.value = 1;
+        sheetTranslateY.value = 0;
+      } else {
+        backdropOpacity.value = withTiming(1, getEnterTiming(motionDurations.normal));
+        sheetTranslateY.value = withSpring(0, motionSprings.sheet);
+      }
+      return;
+    }
+
+    if (isRendered) {
+      if (reduceMotion) {
+        backdropOpacity.value = 0;
+        sheetTranslateY.value = SHEET_HIDDEN_OFFSET;
+        setIsRendered(false);
+        return;
+      }
+
+      backdropOpacity.value = withTiming(0, getExitTiming(EXIT_DURATION_MS));
+      sheetTranslateY.value = withTiming(SHEET_HIDDEN_OFFSET, getExitTiming(EXIT_DURATION_MS));
+
+      const timer = setTimeout(() => {
+        setIsRendered(false);
+      }, EXIT_DURATION_MS);
+
+      return () => clearTimeout(timer);
+    }
+  }, [backdropOpacity, isRendered, reduceMotion, sheetTranslateY, visible]);
+
+  const backdropAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: backdropOpacity.value,
+  }));
+
+  const sheetAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: sheetTranslateY.value }],
+  }));
+
+  if (!isRendered && !visible) {
+    return null;
+  }
 
   return (
     <Modal
-      visible={visible}
+      visible={isRendered}
       transparent
-      animationType="fade"
+      animationType="none"
       statusBarTranslucent
       onRequestClose={onClose}
     >
-      {/* Backdrop press dismisses the sheet */}
-      <Pressable
-        style={[styles.backdrop, { backgroundColor: colors.neutral.scrim }]}
-        onPress={onClose}
-      >
-        {/* Stop propagation so tapping inside the sheet does not close it */}
-        <Pressable
-          onPress={(e) => e.stopPropagation()}
+      <View style={styles.root}>
+        {/* Animated Scrim Backdrop (tap outside dismisses sheet) */}
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: colors.neutral.scrim },
+            backdropAnimatedStyle,
+          ]}
+        >
+          <Pressable style={styles.backdropPressable} onPress={onClose} />
+        </Animated.View>
+
+        {/* Spring-Animated Bottom Sheet Surface */}
+        <Animated.View
           style={[
             styles.sheet,
             {
@@ -61,6 +135,7 @@ export function ModalSheet({
               borderColor: colors.neutral.border,
               paddingBottom: Math.max(insets.bottom, spacing.lg),
             },
+            sheetAnimatedStyle,
             contentStyle,
           ]}
         >
@@ -76,16 +151,19 @@ export function ModalSheet({
           ) : null}
 
           <View style={styles.body}>{children}</View>
-        </Pressable>
-      </Pressable>
+        </Animated.View>
+      </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
+  root: {
     flex: 1,
     justifyContent: 'flex-end',
+  },
+  backdropPressable: {
+    flex: 1,
   },
   sheet: {
     borderTopLeftRadius: radii.lg,

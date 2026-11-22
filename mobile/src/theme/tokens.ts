@@ -22,6 +22,8 @@ export interface ThemeColors {
     primarySubtle: string;
     /** Inverted hero/emphasis card background */
     hero: string;
+    /** Crisp readable foreground text/icons inside `brand.hero` */
+    heroText: string;
     /** Elevated surface inside an inverted hero card */
     heroElevated: string;
     /** Hairline border inside an inverted hero card */
@@ -80,6 +82,7 @@ export const lightColors: ThemeColors = {
     primaryPressed: '#27272A',
     primarySubtle: '#F4F4F5',
     hero: '#09090B',
+    heroText: '#FFFFFF',
     heroElevated: '#18181B',
     heroBorder: '#27272A',
   },
@@ -120,6 +123,7 @@ export const darkColors: ThemeColors = {
     primaryPressed: '#D4D4D8',
     primarySubtle: '#18181B',
     hero: '#18181B',
+    heroText: '#FAFAFA',
     heroElevated: '#27272A',
     heroBorder: '#3F3F46',
   },

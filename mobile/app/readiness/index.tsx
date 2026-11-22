@@ -100,7 +100,7 @@ export default function TaxReadinessScreen() {
             <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
               {isRTL ? 'مؤشر الجاهزية العام' : 'OVERALL READINESS'}
             </AppText>
-            <View style={[styles.heroBadge, { borderColor: colors.neutral.textInverted }]}>
+            <View style={[styles.heroBadge, { borderColor: colors.brand.heroText }]}>
               <AppText variant="caption" weight="semiBold" tone="inverted">
                 {readiness?.isAuditReady ? 'AUDIT READY' : 'IN PROGRESS'}
               </AppText>
@@ -117,7 +117,7 @@ export default function TaxReadinessScreen() {
                 styles.fill,
                 {
                   width: `${overallScore}%`,
-                  backgroundColor: colors.neutral.textInverted,
+                  backgroundColor: colors.brand.heroText,
                 },
               ]}
             />
@@ -127,7 +127,7 @@ export default function TaxReadinessScreen() {
         {error ? (
           <Card style={styles.errorCard}>
             <AppText variant="bodySmall" weight="semiBold">
-              ! {error}
+              {error}
             </AppText>
             <Button label={isRTL ? 'إعادة المحاولة' : 'Retry'} variant="outline" onPress={loadReadiness} />
           </Card>

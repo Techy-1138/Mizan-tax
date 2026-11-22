@@ -246,6 +246,18 @@ export class BusinessService {
 
     if (process.env.DATABASE_URL) {
       try {
+        // Ensure parent Organisation exists for Firebase stateless org IDs (e.g. org-<uid>)
+        // so Business upsert never fails with a foreign-key constraint violation (P2003).
+        await (this.prisma as any).organisation.upsert({
+          where: { id: effectiveOrgId },
+          update: {},
+          create: {
+            id: effectiveOrgId,
+            name: dto.legalName || 'UAE Business Workspace',
+            legalName: dto.legalName || 'UAE Business Workspace',
+          },
+        });
+
         const business = await (this.prisma as any).business.upsert({
           where: {
             organisationId_tradeLicenseNumber: {

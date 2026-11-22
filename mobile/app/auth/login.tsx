@@ -5,14 +5,18 @@
 // ============================================================================
 
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { MizanApi } from '../../src/services/api';
-import { isGoogleSignInSupported, performGoogleSignIn } from '../../src/services/googleAuth';
+import { performGoogleSignIn } from '../../src/services/googleAuth';
+import { getFriendlyErrorMessage } from '../../src/utils/errorMessages';
 import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
+import { useBusiness } from '../../src/context/BusinessContext';
 import { borders, radii, spacing } from '../../src/theme/tokens';
 import {
+  AnimatedPressable,
   AppText,
   Button,
   Card,
@@ -28,6 +32,7 @@ export default function LoginScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { isRTL, toggleLocale } = useLocale();
+  const { refreshBusinesses } = useBusiness();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -42,11 +47,10 @@ export default function LoginScreen() {
   const [resetLoading, setResetLoading] = useState(false);
   const [resetFeedback, setResetFeedback] = useState<string | null>(null);
 
-  const googleSupported = isGoogleSignInSupported();
-
   /** Routes authenticated user to Tabs (if business exists) or Onboarding */
   const routeAfterAuth = async () => {
     try {
+      await refreshBusinesses();
       const businesses = await MizanApi.getBusinesses();
       if (Array.isArray(businesses) && businesses.length > 0) {
         router.replace('/(tabs)');
@@ -81,8 +85,12 @@ export default function LoginScreen() {
       await routeAfterAuth();
     } catch (err: any) {
       setFormError(
-        err?.message ||
-          (isRTL ? 'فشل تسجيل الدخول. تحقق من البيانات.' : 'Sign-in failed. Check your credentials.')
+        getFriendlyErrorMessage(
+          err,
+          isRTL,
+          'Sign-in failed. Please check your email and password.',
+          'فشل تسجيل الدخول. يرجى التحقق من البريد وكلمة المرور.'
+        )
       );
     } finally {
       setLoading(false);
@@ -123,7 +131,12 @@ export default function LoginScreen() {
       );
     } catch (err: any) {
       setResetFeedback(
-        err?.message || (isRTL ? 'تعذر إرسال رابط التعيين' : 'Could not send reset email.')
+        getFriendlyErrorMessage(
+          err,
+          isRTL,
+          'Could not send reset email. Please check the address.',
+          'تعذر إرسال رابط إعادة التعيين. تحقق من البريد الإلكتروني.'
+        )
       );
     } finally {
       setResetLoading(false);
@@ -165,6 +178,40 @@ export default function LoginScreen() {
             ? 'مساحة عمل الامتثال لضريبة الشركات وضريبة القيمة المضافة'
             : 'UAE Corporate Tax & VAT compliance workspace'}
         </AppText>
+      </View>
+
+      {/* 1-Tap Google Sign-In (Prominent Primary Option) */}
+      <AnimatedPressable
+        onPress={handleGoogleSignIn}
+        disabled={loading || googleLoading}
+        style={[
+          styles.googleBtn,
+          {
+            backgroundColor: colors.neutral.surface,
+            borderColor: colors.neutral.borderStrong,
+            opacity: loading || googleLoading ? 0.55 : 1,
+          },
+        ]}
+      >
+        {googleLoading ? (
+          <ActivityIndicator size="small" color={colors.neutral.textPrimary} />
+        ) : (
+          <>
+            <Ionicons name="logo-google" size={18} color={colors.neutral.textPrimary} />
+            <AppText variant="body" weight="semiBold">
+              {isRTL ? 'المتابعة عبر Google' : 'Continue with Google'}
+            </AppText>
+          </>
+        )}
+      </AnimatedPressable>
+
+      {/* Divider */}
+      <View style={styles.dividerRow}>
+        <View style={[styles.dividerLine, { backgroundColor: colors.neutral.border }]} />
+        <AppText variant="caption" tone="muted">
+          {isRTL ? 'أو' : 'OR'}
+        </AppText>
+        <View style={[styles.dividerLine, { backgroundColor: colors.neutral.border }]} />
       </View>
 
       {/* Credentials Card */}
@@ -223,7 +270,7 @@ export default function LoginScreen() {
             ]}
           >
             <AppText variant="bodySmall" weight="semiBold">
-              ! {formError}
+              {formError}
             </AppText>
           </View>
         ) : null}
@@ -237,27 +284,6 @@ export default function LoginScreen() {
           style={styles.submitBtn}
         />
       </Card>
-
-      {/* Google Sign-In Section */}
-      {googleSupported ? (
-        <>
-          <View style={styles.dividerRow}>
-            <View style={[styles.dividerLine, { backgroundColor: colors.neutral.border }]} />
-            <AppText variant="caption" tone="muted">
-              {isRTL ? 'أو' : 'OR'}
-            </AppText>
-            <View style={[styles.dividerLine, { backgroundColor: colors.neutral.border }]} />
-          </View>
-
-          <Button
-            label={isRTL ? 'المتابعة عبر Google' : 'Continue with Google'}
-            variant="outline"
-            loading={googleLoading}
-            disabled={loading}
-            onPress={handleGoogleSignIn}
-          />
-        </>
-      ) : null}
 
       {/* Register Link */}
       <View style={styles.footerRow}>
@@ -334,6 +360,16 @@ const styles = StyleSheet.create({
   },
   title: {
     marginTop: spacing.xxs,
+  },
+  googleBtn: {
+    minHeight: 50,
+    borderRadius: radii.md,
+    borderWidth: borders.hairline,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs + 2,
+    paddingHorizontal: spacing.lg,
   },
   card: {
     gap: spacing.md,

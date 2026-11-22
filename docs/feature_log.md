@@ -38,7 +38,7 @@ graph TD
         SKELETON[FEAT-UI-01: Shimmer Skeleton Placeholders]
         BANK_IMPORT[FEAT-BANK-01: Deterministic Bank CSV Importer - Zero AI]
         TYPO[FEAT-UI-02: Modernist Neo-Khaleeji Typography Engine]
-        SMOOTH_MODAL[FEAT-UI-03: Zero-Distortion Smooth Spring Modal Engine]
+        SMOOTH_MODAL[FEAT-UI-03: Reanimated v4 Motion & Smooth Navigation Engine]
         THEME[FEAT-UI-04: Adaptive Dark Theme Engine]
     end
 

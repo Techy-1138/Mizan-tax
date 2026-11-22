@@ -1,5 +1,5 @@
 // ============================================================================
-// Mizan (ميزان) - UI Primitives Barrel Export
+// Mizan (ميزان) - UI & Motion Primitives Barrel Export
 // ============================================================================
 
 export { Screen, type ScreenProps } from './Screen';
@@ -9,3 +9,17 @@ export { Card, type CardProps, type CardVariant } from './Card';
 export { TextField, type TextFieldProps } from './TextField';
 export { Badge, type BadgeProps, type BadgeVariant } from './Badge';
 export { ModalSheet, type ModalSheetProps } from './ModalSheet';
+
+// Re-export motion primitives for convenient single-import usage across screens
+export {
+  FadeIn,
+  type FadeInProps,
+  SlideIn,
+  type SlideInProps,
+  type SlideDirection,
+  AnimatedPressable,
+  type AnimatedPressableProps,
+  motionDurations,
+  motionEasings,
+  motionSprings,
+} from '../motion';

@@ -207,8 +207,8 @@ export default function ComplianceReportsScreen() {
                   style={[
                     styles.chip,
                     {
-                      backgroundColor: active ? colors.neutral.textInverted : 'transparent',
-                      borderColor: active ? colors.neutral.textInverted : colors.brand.heroBorder,
+                      backgroundColor: active ? colors.brand.heroText : 'transparent',
+                      borderColor: active ? colors.brand.heroText : colors.brand.heroBorder,
                     },
                   ]}
                 >
@@ -216,6 +216,7 @@ export default function ComplianceReportsScreen() {
                     variant="caption"
                     weight="semiBold"
                     tone={active ? 'primary' : 'inverted'}
+                    style={active ? { color: colors.neutral.black } : undefined}
                   >
                     {isRTL ? rt.ar : rt.en}
                   </AppText>
@@ -226,14 +227,10 @@ export default function ComplianceReportsScreen() {
 
           <Button
             label={isRTL ? 'إنشاء التقرير' : 'Generate Report'}
-            variant="outline"
+            variant="onHero"
             loading={generating}
             onPress={handleGenerate}
-            style={{
-              backgroundColor: colors.neutral.textInverted,
-              borderColor: colors.neutral.textInverted,
-              marginTop: spacing.xs,
-            }}
+            style={{ marginTop: spacing.xs }}
           />
         </Card>
 

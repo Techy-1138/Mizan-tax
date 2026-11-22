@@ -12,10 +12,16 @@ import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
 import { MizanApi, SaveTradeLicensePayload } from '../../src/services/api';
 import { VisionOcr } from '../../src/services/visionOcr';
+import { getFriendlyErrorMessage } from '../../src/utils/errorMessages';
+import {
+  requestCameraOsPermission,
+  requestFilesOsPermission,
+} from '../../src/utils/permissions';
 import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
+import { useBusiness } from '../../src/context/BusinessContext';
 import { borders, radii, spacing } from '../../src/theme/tokens';
-import { AppText, Badge, Button, Card, ModalSheet, Screen, TextField } from '../../src/ui';
+import { AppText, Badge, Button, Card, Screen, SlideIn, TextField } from '../../src/ui';
 
 type EntryMode = 'scan' | 'upload' | 'manual';
 type EntityType = SaveTradeLicensePayload['legalEntityType'];
@@ -95,6 +101,7 @@ export default function BusinessOnboardingScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { isRTL, toggleLocale } = useLocale();
+  const { addOrUpdateBusiness } = useBusiness();
 
   const [mode, setMode] = useState<EntryMode>('manual');
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -119,7 +126,6 @@ export default function BusinessOnboardingScreen() {
   const [ocrLoading, setOcrLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [permissionPrompt, setPermissionPrompt] = useState<'camera' | 'files' | null>(null);
   const [settingsRequired, setSettingsRequired] = useState(false);
 
   const parsedRevenue = useMemo(() => {
@@ -150,10 +156,12 @@ export default function BusinessOnboardingScreen() {
       setStep(1);
     } catch (err: any) {
       setError(
-        err?.message ||
-          (isRTL
-            ? 'تعذر استخراج بيانات الرخصة. يمكنك الإدخال يدوياً.'
-            : 'Could not extract Trade License details. You can enter them manually.')
+        getFriendlyErrorMessage(
+          err,
+          isRTL,
+          'Could not extract Trade License details. You can enter them manually.',
+          'تعذر استخراج بيانات الرخصة. يمكنك الإدخال يدوياً.'
+        )
       );
     } finally {
       setOcrLoading(false);
@@ -165,7 +173,7 @@ export default function BusinessOnboardingScreen() {
     setError(null);
     setSettingsRequired(false);
     try {
-      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      const perm = await requestCameraOsPermission();
       if (!perm.granted) {
         setSettingsRequired(!perm.canAskAgain);
         setError(
@@ -175,7 +183,6 @@ export default function BusinessOnboardingScreen() {
         );
         return;
       }
-      setPermissionPrompt(null);
 
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
@@ -189,7 +196,6 @@ export default function BusinessOnboardingScreen() {
         await applyOcrResult(base64, asset.mimeType || 'image/jpeg');
       }
     } catch (err: any) {
-      setPermissionPrompt(null);
       setError(
         err?.message ||
           (isRTL
@@ -199,16 +205,21 @@ export default function BusinessOnboardingScreen() {
     }
   };
 
-  /** Requests media/files permission and opens native document picker */
+  /** Requests OS media/files permission and opens native document picker */
   const handleDocumentUpload = async () => {
     setError(null);
     setSettingsRequired(false);
     try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted && !perm.canAskAgain) {
-        setSettingsRequired(true);
+      const perm = await requestFilesOsPermission();
+      if (!perm.granted) {
+        setSettingsRequired(!perm.canAskAgain);
+        setError(
+          isRTL
+            ? 'تم رفض إذن الوصول إلى الملفات والصور. اسمح بالوصول من الإعدادات.'
+            : 'Files/Media permission denied. Allow access in Settings to upload a Trade License.'
+        );
+        return;
       }
-      setPermissionPrompt(null);
 
       // Keep copyToCacheDirectory: false so content:// URIs are read directly without cache IO issues
       const result = await DocumentPicker.getDocumentAsync({
@@ -230,7 +241,6 @@ export default function BusinessOnboardingScreen() {
         await applyOcrResult(base64, asset.mimeType || 'application/pdf');
       }
     } catch (err: any) {
-      setPermissionPrompt(null);
       setError(
         err?.message ||
           (isRTL
@@ -304,12 +314,17 @@ export default function BusinessOnboardingScreen() {
         ...(cleanCt ? { corporateTaxTrn: cleanCt } : {}),
       };
 
-      await MizanApi.saveTradeLicense(payload);
+      // Persist through BusinessContext so activeBusiness & cached list update immediately
+      await addOrUpdateBusiness(payload);
       router.replace('/(tabs)');
     } catch (err: any) {
       setError(
-        err?.message ||
-          (isRTL ? 'تعذر حفظ بيانات المنشأة.' : 'Failed to save business entity.')
+        getFriendlyErrorMessage(
+          err,
+          isRTL,
+          'Failed to save business entity. Please try again.',
+          'تعذر حفظ بيانات المنشأة. يرجى المحاولة مرة أخرى.'
+        )
       );
     } finally {
       setSubmitting(false);
@@ -416,8 +431,17 @@ export default function BusinessOnboardingScreen() {
           ]}
         >
           <AppText variant="bodySmall" weight="semiBold">
-            ! {error}
+            {error}
           </AppText>
+          {settingsRequired ? (
+            <Button
+              label={isRTL ? 'فتح إعدادات الجهاز' : 'Open Device Settings'}
+              variant="outline"
+              size="md"
+              onPress={() => Linking.openSettings()}
+              style={{ marginTop: spacing.xs }}
+            />
+          ) : null}
         </View>
       ) : null}
 
@@ -454,11 +478,7 @@ export default function BusinessOnboardingScreen() {
                   : 'Choose File'
             }
             loading={ocrLoading}
-            onPress={() => {
-              setError(null);
-              setSettingsRequired(false);
-              setPermissionPrompt(mode === 'scan' ? 'camera' : 'files');
-            }}
+            onPress={mode === 'scan' ? handleCameraScan : handleDocumentUpload}
           />
         </Card>
       ) : (
@@ -481,7 +501,7 @@ export default function BusinessOnboardingScreen() {
           </View>
 
           {step === 1 ? (
-            <View style={styles.stepFields}>
+            <SlideIn key="step-1" from={isRTL ? 'left' : 'right'} style={styles.stepFields}>
               <TextField
                 label={isRTL ? 'الاسم القانوني' : 'Legal Name'}
                 placeholder="Al Nahda Trading LLC"
@@ -530,11 +550,11 @@ export default function BusinessOnboardingScreen() {
                   })}
                 </View>
               </View>
-            </View>
+            </SlideIn>
           ) : null}
 
           {step === 2 ? (
-            <View style={styles.stepFields}>
+            <SlideIn key="step-2" from={isRTL ? 'left' : 'right'} style={styles.stepFields}>
               <View>
                 <AppText variant="bodySmall" weight="medium" tone="secondary" style={styles.chipLabel}>
                   {isRTL ? 'النطاق القانوني' : 'Jurisdiction'}
@@ -589,11 +609,11 @@ export default function BusinessOnboardingScreen() {
                   />
                 </View>
               </View>
-            </View>
+            </SlideIn>
           ) : null}
 
           {step === 3 ? (
-            <View style={styles.stepFields}>
+            <SlideIn key="step-3" from={isRTL ? 'left' : 'right'} style={styles.stepFields}>
               <TextField
                 label={isRTL ? 'الإيرادات السنوية المقدرة (درهم)' : 'Est. Annual Revenue (AED)'}
                 placeholder="1250000"
@@ -637,7 +657,7 @@ export default function BusinessOnboardingScreen() {
                   </AppText>
                 </View>
               ) : null}
-            </View>
+            </SlideIn>
           ) : null}
 
           {/* Wizard Step Navigation */}
@@ -670,56 +690,6 @@ export default function BusinessOnboardingScreen() {
           </View>
         </Card>
       )}
-
-      {/* Pre-Access Permission ModalSheet for Camera & Files */}
-      <ModalSheet
-        visible={permissionPrompt !== null}
-        onClose={() => setPermissionPrompt(null)}
-        title={
-          permissionPrompt === 'camera'
-            ? isRTL
-              ? 'إذن الوصول إلى الكاميرا'
-              : 'Allow Camera Access'
-            : isRTL
-              ? 'إذن الوصول إلى الملفات'
-              : 'Allow Files Access'
-        }
-      >
-        <AppText variant="bodySmall" tone="secondary">
-          {permissionPrompt === 'camera'
-            ? isRTL
-              ? 'يحتاج ميزان إلى الكاميرا لتصوير الرخصة التجارية واستخراج البيانات تلقائياً.'
-              : 'Mizan needs access to your camera to capture your UAE Trade License for OCR extraction.'
-            : isRTL
-              ? 'يحتاج ميزان إلى الوصول لملفاتك لاختيار الرخصة التجارية بصيغة PDF أو صورة.'
-              : 'Mizan needs access to your device files to select your Trade License PDF or image.'}
-        </AppText>
-        <Button
-          label={
-            permissionPrompt === 'camera'
-              ? isRTL
-                ? 'السماح وفتح الكاميرا'
-                : 'Allow & Open Camera'
-              : isRTL
-                ? 'السماح واختيار ملف'
-                : 'Allow & Choose File'
-          }
-          variant="primary"
-          onPress={permissionPrompt === 'camera' ? handleCameraScan : handleDocumentUpload}
-        />
-        {settingsRequired ? (
-          <Button
-            label={isRTL ? 'فتح إعدادات الجهاز' : 'Open Device Settings'}
-            variant="outline"
-            onPress={() => Linking.openSettings()}
-          />
-        ) : null}
-        <Button
-          label={isRTL ? 'إلغاء' : 'Cancel'}
-          variant="ghost"
-          onPress={() => setPermissionPrompt(null)}
-        />
-      </ModalSheet>
     </Screen>
   );
 }

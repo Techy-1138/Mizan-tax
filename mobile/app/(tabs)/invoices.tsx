@@ -17,6 +17,7 @@ import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
 import { VisionOcr } from '../../src/services/visionOcr';
+import { requestCameraOsPermission } from '../../src/utils/permissions';
 import { borders, radii, spacing } from '../../src/theme/tokens';
 import { AppText, Badge, Button, Card, ModalSheet, TextField } from '../../src/ui';
 
@@ -96,7 +97,7 @@ export default function InvoicesScreen() {
   /** Scans an existing invoice photo via OCR and prefills Manual fields */
   const handleScanExistingInvoice = async () => {
     setFeedback(null);
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    const perm = await requestCameraOsPermission();
     if (!perm.granted) {
       setFeedback(
         isRTL

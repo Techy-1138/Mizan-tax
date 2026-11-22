@@ -16,6 +16,8 @@ import {
   signInWithCredential,
   sendPasswordResetEmail,
   updateProfile,
+  // @ts-ignore - getReactNativePersistence is resolved via @firebase/auth "react-native" export condition
+  getReactNativePersistence,
 } from 'firebase/auth';
 import {
   getFirestore,
@@ -37,8 +39,6 @@ import {
   increment,
   Firestore,
 } from 'firebase/firestore';
-// @ts-ignore - getReactNativePersistence is resolved in react-native runtime from @firebase/auth/dist/rn
-import { getReactNativePersistence } from '@firebase/auth/dist/rn/index.js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const firebaseConfig = {
