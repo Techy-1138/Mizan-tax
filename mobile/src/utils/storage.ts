@@ -39,6 +39,27 @@ export const AppStorage = {
     }
   },
 
+  /**
+   * Removes all persisted keys starting with `prefix` (used on logout to purge
+   * per-entity SWR caches and prevent cross-account cache bleed).
+   */
+  removeByPrefix: async (prefix: string): Promise<void> => {
+    for (const key of Array.from(memoryStore.keys())) {
+      if (key.startsWith(prefix)) {
+        memoryStore.delete(key);
+      }
+    }
+    try {
+      const allKeys = await AsyncStorage.getAllKeys();
+      const matching = allKeys.filter((k) => k.startsWith(prefix));
+      if (matching.length > 0) {
+        await AsyncStorage.multiRemove(matching);
+      }
+    } catch {
+      // Memory store keys already purged
+    }
+  },
+
   clear: async (): Promise<void> => {
     memoryStore.clear();
     try {

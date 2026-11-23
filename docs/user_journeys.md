@@ -37,17 +37,22 @@ flowchart TD
         AI_OCR --> PREFILL[Pre-populate Fields & Switch to Form]
         CHOOSE_MODE -- ✍️ Enter Manually --> STEP1
         PREFILL --> STEP1[Step 1: Legal Entity Type & Trade Name]
-        STEP1 --> STEP2[Step 2: Jurisdiction, Licensing Authority & Emirate]
+        STEP1 --> CHECK_UNIQ{Trade License Already Registered to Another User?}
+        CHECK_UNIQ -- Yes --> WARN_MASKED[Warn with Masked Owner Email e.g. hi****17@gmail.com]
+        WARN_MASKED --> STEP1
+        CHECK_UNIQ -- No --> STEP2[Step 2: Jurisdiction, Licensing Authority & Emirate]
         STEP2 --> STEP3[Step 3: Revenue & Tax Profile - SBR / VAT TRN]
-        STEP3 --> SUBMIT_BIZ[Persist Business Entity in Backend]
+        STEP3 --> SUBMIT_BIZ[Persist Business Entity in Backend - 409 Guarded]
         SUBMIT_BIZ --> DASHBOARD
     end
 
     subgraph Authenticated Product Surfaces
-        DASHBOARD --> BOOKS[Bookkeeping & Ledger: app/tabs/books.tsx]
-        DASHBOARD --> INVOICES[Bilingual Invoicing: app/tabs/invoices.tsx]
-        DASHBOARD --> TAX[Corporate Tax & VAT Filings: app/tabs/tax.tsx]
-        DASHBOARD --> SCANNER[Trade License & OCR Scanner: app/tabs/scan.tsx]
+        DASHBOARD --> BOOKS[Bookkeeping & Ledger: app/tabs/books.tsx - SWR + Skeletons]
+        DASHBOARD --> INVOICES[Bilingual Invoicing: app/tabs/invoices.tsx - SWR + Skeletons]
+        DASHBOARD --> TAX[Corporate Tax & VAT Filings: app/tabs/tax.tsx - SWR + Skeletons]
+        DASHBOARD --> READINESS[Tax Readiness Breakdown: app/readiness/index.tsx - Skeletons]
+        DASHBOARD --> REPORTS[Compliance Reports: app/reports/index.tsx - Skeletons]
+        DASHBOARD --> AI_CHAT[Tax AI Assistant: app/learn/chat.tsx - Optimistic + Retry]
         DASHBOARD --> PROFILE[Entity Switcher & Settings: app/tabs/profile.tsx]
         DASHBOARD --> CT_TRACKER[CT Registration Tracker: FTA Dec 3/2024 Countdown]
         DASHBOARD --> SYNC_STATUS[Sync Status Pill: Online/Offline Queue Flush]

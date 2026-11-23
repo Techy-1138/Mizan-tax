@@ -194,14 +194,19 @@ export class OfflineQueueService {
         if (businessId) {
           await FirestoreService.saveExpense(businessId, payload);
           try {
+            // Align payload fields with MizanApi.createManualExpense DTO contract
+            const totalAED = Number(payload.totalAmountAED ?? payload.totalAmount ?? payload.amount ?? 0);
+            const vatAED = Number(payload.vatAmountAED ?? payload.vatAmount ?? 0);
+            const netAED = Number(payload.netAmountAED ?? Math.max(0, totalAED - vatAED));
             await MizanApi.createManualExpense({
               businessId,
-              supplierName: payload.merchantName || payload.supplierName,
-              totalAmount: payload.amount || payload.totalAmount,
-              expenseDate: payload.date || payload.expenseDate,
-              category: payload.category,
-              notes: payload.notes,
-              isEntertainmentSplit: payload.isEntertainmentSplit,
+              merchantName: payload.merchantName || payload.supplierName || 'Expense',
+              expenseDate: payload.expenseDate || payload.date || new Date().toISOString().split('T')[0],
+              netAmountAED: netAED,
+              vatAmountAED: vatAED,
+              totalAmountAED: totalAED,
+              category: payload.category || 'GENERAL',
+              source: payload.source || 'OFFLINE_QUEUE',
             });
           } catch {}
         }

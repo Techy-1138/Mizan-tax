@@ -10,6 +10,7 @@ graph TD
         GUARD[FEAT-AUTH-03: Route Gatekeeper]
         ONBOARD[FEAT-AUTH-02: Mandatory Business Onboarding]
         ONBOARD_TRI[FEAT-ONBD-02: 3-Way Entry - Scan, Upload, Manual]
+        BIZ_UNIQ[FEAT-BIZ-03: Duplicate Entity Guard & Masked Email Warning]
         FIRESTORE[FEAT-DATA-01: Cloud Firestore Multi-Tenant Store]
         BIZ_CTX[Business Multi-Entity Context]
         PREFS[FEAT-PREF-01: App Preferences & Silent Defaults]
@@ -47,6 +48,10 @@ graph TD
     GOOGLE --> GUARD
     GUARD --> ONBOARD
     ONBOARD --> ONBOARD_TRI
+    ONBOARD_TRI --> BIZ_UNIQ
+    BIZ_UNIQ --> AUTH
+    BIZ_UNIQ --> FIRESTORE
+    BIZ_DEL --> BIZ_UNIQ
     ONBOARD_TRI --> OCR_LIC
     ONBOARD_TRI --> FIRESTORE
     PERM --> OCR_LIC
@@ -71,6 +76,9 @@ graph TD
     BANK_IMPORT --> ENT_SPLIT
     SYNC_QUEUE --> FIRESTORE
     SKELETON --> DASH
+    SKELETON --> INVOICE
+    SKELETON --> OCR_EXP
+    SKELETON --> TAX_ENG
     TYPO --> DASH
     TYPO --> INVOICE
     TYPO --> CT_COUNTDOWN
@@ -92,6 +100,9 @@ graph TD
     OPTIMISTIC --> DASH
     OPTIMISTIC --> INVOICE
     OPTIMISTIC --> OCR_EXP
+    OPTIMISTIC --> BANK_IMPORT
+    OPTIMISTIC --> TAX_ENG
+    OPTIMISTIC --> AI_ASST
     OPTIMISTIC --> USER_EDIT
 ```
 
@@ -99,4 +110,5 @@ graph TD
 - **Entry Security**: Users entering the mobile application must pass `AUTH` and verify identity.
 - **Entity Pre-condition**: `DASH`, `TAX_ENG`, and `INVOICE` require `activeBusiness` with a valid `tradeLicenseNumber` and jurisdiction configuration.
 - **Onboarding Gate**: If `businesses.length == 0`, the navigation stack intercepts routing and locks into `ONBOARD` until valid company details are committed.
+- **Entity Uniqueness & Privacy**: `BIZ_UNIQ` enforces global single-owner uniqueness on normalized Trade License numbers in PostgreSQL (`409 ENTITY_ALREADY_REGISTERED`), stops 4xx errors from falling back to Firestore, and masks the existing owner's email (e.g. `hi****17@gmail.com`).
 - **Adaptive Theming**: `THEME` resolves OS `useColorScheme()` against the persisted `themeMode` preference (`'system' | 'light' | 'dark'`) via `ThemeProvider` and `expo-system-ui`, while intentionally keeping camera scanner viewfinders dark and exported `expo-print` HTML reports white-paper.

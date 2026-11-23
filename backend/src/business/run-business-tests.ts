@@ -14,6 +14,7 @@
 // ============================================================================
 
 import { BusinessService } from './business.service';
+import { maskEmail, normalizeTradeLicenseNumber } from './business-identity.util';
 import { LegalEntityTypeDto, JurisdictionTypeDto } from './dto/create-trade-license.dto';
 import { OcrService } from '../ocr/ocr.service';
 
@@ -228,6 +229,164 @@ async function runBusinessTests() {
       readiness.corporateTax.reliefStatus.includes('Standard 9% Applicable'),
     'TC-BIZ-12: EmaraTax readiness assessment evaluates posture based on active entity profile'
   );
+
+  // --------------------------------------------------------------------------
+  // 6. CROSS-USER DUPLICATE ENTITY GUARD & PRIVACY-MASKED EMAIL WARNING
+  // --------------------------------------------------------------------------
+  console.log('\n--- 6. CROSS-USER DUPLICATE ENTITY GUARD & EMAIL MASKING ---');
+
+  // TC-BIZ-13: Email masking and license normalization invariants
+  assert(
+    maskEmail('hitesh17@gmail.com') === 'hi****17@gmail.com' &&
+      maskEmail('ab@mizan.ae') === 'a****@mizan.ae' &&
+      normalizeTradeLicenseNumber(' cn-482 9104 ') === 'CN4829104',
+    'TC-BIZ-13: maskEmail produces privacy-safe hi****17@gmail.com format and license normalizer strips formatting'
+  );
+
+  // TC-BIZ-14: Register entity with User 1 email, then block User 2 with 409 & masked email
+  const owner1Org = 'org-user-hitesh';
+  const owner1Email = 'hitesh17@gmail.com';
+  const owner2Org = 'org-user-other';
+  const owner2Email = 'other.user@gmail.com';
+
+  const registeredByUser1 = await businessService.createOrUpdateTradeLicense(
+    {
+      tradeLicenseNumber: 'CN-7788990',
+      legalName: 'Al Noor Tech Services LLC',
+      legalEntityType: LegalEntityTypeDto.LLC,
+      jurisdictionType: JurisdictionTypeDto.MAINLAND,
+      licensingAuthority: 'DET',
+    },
+    owner1Org,
+    owner1Email
+  );
+
+  // Pre-onboarding availability check from User 2 (with different formatting)
+  const availForUser2 = await businessService.checkTradeLicenseAvailability('cn 7788990', owner2Org);
+  assert(
+    availForUser2.available === false &&
+      availForUser2.ownedByCurrentUser === false &&
+      availForUser2.maskedEmail === 'hi****17@gmail.com' &&
+      availForUser2.message === 'Entity is already registered with "hi****17@gmail.com".',
+    'TC-BIZ-14: Pre-onboarding availability check warns User 2 with masked email without exposing full email'
+  );
+
+  // Actual onboarding attempt by User 2 throws 409 Conflict with masked email
+  let duplicateBlocked = false;
+  let duplicateConflictPayload: any = null;
+  try {
+    await businessService.createOrUpdateTradeLicense(
+      {
+        tradeLicenseNumber: 'cn-7788990',
+        legalName: 'Al Noor Tech Copy LLC',
+        legalEntityType: LegalEntityTypeDto.LLC,
+        jurisdictionType: JurisdictionTypeDto.MAINLAND,
+        licensingAuthority: 'DET',
+      },
+      owner2Org,
+      owner2Email
+    );
+  } catch (err: any) {
+    duplicateConflictPayload = err.getResponse?.() || {};
+    duplicateBlocked =
+      err.status === 409 &&
+      duplicateConflictPayload.code === 'ENTITY_ALREADY_REGISTERED' &&
+      duplicateConflictPayload.maskedEmail === 'hi****17@gmail.com' &&
+      duplicateConflictPayload.message === 'Entity is already registered with "hi****17@gmail.com".' &&
+      !JSON.stringify(duplicateConflictPayload).includes(owner1Email);
+  }
+  assert(
+    duplicateBlocked,
+    'TC-BIZ-15: Duplicate entity onboarding by another user throws 409 Conflict with masked email and zero raw email leak'
+  );
+
+  // TC-BIZ-16: Same owner can still update their own registered entity
+  const updatedByOwner1 = await businessService.createOrUpdateTradeLicense(
+    {
+      tradeLicenseNumber: 'CN-7788990',
+      legalName: 'Al Noor Tech Services Updated LLC',
+      legalEntityType: LegalEntityTypeDto.LLC,
+      jurisdictionType: JurisdictionTypeDto.MAINLAND,
+      licensingAuthority: 'DET',
+    },
+    owner1Org,
+    owner1Email
+  );
+  assert(
+    updatedByOwner1.id === registeredByUser1.id &&
+      updatedByOwner1.legalName === 'Al Noor Tech Services Updated LLC',
+    'TC-BIZ-16: Original owner can update their own registered entity without triggering conflict'
+  );
+
+  // TC-BIZ-17: After original owner deletes entity, another user can onboard it cleanly
+  await businessService.deleteBusiness(registeredByUser1.id, owner1Org);
+  const availAfterDelete = await businessService.checkTradeLicenseAvailability('CN-7788990', owner2Org);
+  assert(
+    availAfterDelete.available === true,
+    'TC-BIZ-17: Deleting an entity releases its Trade License for legitimate future onboarding'
+  );
+
+  // TC-BIZ-18: OCR enforces magic-byte MIME and falls back to active Gemini 3.6 Flash (never retired 1.5 Flash)
+  const origFetch = global.fetch;
+  const origApiKey = process.env.GEMINI_API_KEY;
+  const calledModels: string[] = [];
+  let capturedMime = '';
+  try {
+    process.env.GEMINI_API_KEY = 'test-ocr-key';
+    global.fetch = (async (input: any, init?: any) => {
+      const url = String(input);
+      calledModels.push(url);
+      const parsedBody = init?.body ? JSON.parse(init.body) : {};
+      capturedMime = parsedBody?.contents?.[0]?.parts?.[0]?.inlineData?.mimeType || '';
+      if (url.includes('gemini-3.5-flash-lite')) {
+        return new Response('Service Unavailable', { status: 503 });
+      }
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      licenseNumber: 'CN-5544332',
+                      businessName: 'Crescent Tech LLC',
+                      legalForm: 'LLC',
+                      jurisdiction: 'Mainland (Dubai)',
+                      issueDate: '15/01/2024',
+                      expiryDate: '14/01/2027',
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }) as any;
+
+    const ocrFallbackRes = await ocrService.extractTradeLicense(
+      {
+        imageBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAAACAA',
+        mimeType: 'image/jpg', // Intentionally mismatched client MIME
+      },
+      'org-ocr-fallback-test'
+    );
+
+    assert(
+      ocrFallbackRes.extractionStatus === 'SUCCESS' &&
+        ocrFallbackRes.extractionMethod === 'GEMINI_3_6_FLASH' &&
+        ocrFallbackRes.licenseNumber === 'CN-5544332' &&
+        capturedMime === 'image/png' &&
+        !calledModels.some((u) => u.includes('gemini-1.5-flash')),
+      'TC-BIZ-18: OCR uses magic-byte MIME (image/png) and falls back to gemini-3.6-flash without calling retired gemini-1.5-flash'
+    );
+  } finally {
+    global.fetch = origFetch;
+    if (origApiKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = origApiKey;
+  }
 
   // --------------------------------------------------------------------------
   // SUMMARY

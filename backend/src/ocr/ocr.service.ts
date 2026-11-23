@@ -61,6 +61,13 @@ export interface DetailedReceiptExtraction {
 
 @Injectable()
 export class OcrService {
+  // Ordered chain of active multimodal Gemini models supporting Image & PDF OCR with JSON output
+  private static readonly VISION_MODELS = [
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-2.5-flash-lite',
+  ] as const;
+
   // In-memory per-tenant rate limiter: max 15 requests per minute per organisation
   private tenantLimits = new Map<string, RateLimitTracker>();
 
@@ -126,107 +133,27 @@ export class OcrService {
   }
 
   /**
-   * Extracts UAE Trade License details using server-side Gemini Flash
-   * Guaranteed non-fabrication: Never returns fake numbers if extraction fails.
+   * Calls the ordered Gemini Vision model chain with structured JSON output.
+   * Logs per-model failures server-side and returns parsed JSON or upstream error metadata.
    */
-  public async extractTradeLicense(dto: ExtractTradeLicenseDto, organisationId: string) {
-    this.checkRateLimit(organisationId);
-
-    // Validate payload magic bytes against spoofing
-    const detectedMime = this.validateMagicBytes(dto.imageBase64);
-    const mimeType = dto.mimeType || detectedMime;
-
+  private async callGeminiVisionJson(
+    mimeType: string,
+    cleanB64: string,
+    prompt: string
+  ): Promise<{ ok: true; parsed: any; model: string } | { ok: false; upstreamStatus: number }> {
     const apiKey = process.env.GEMINI_API_KEY;
-    const cleanB64 = dto.imageBase64.replace(/^data:[a-zA-Z0-9\/\-+.]+;base64,/, '').trim();
-
     if (!apiKey) {
-      throw new HttpException(
-        {
-          statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
-          error: 'Unprocessable Entity',
-          message:
-            'AI Vision OCR service is temporarily unavailable. Document text could not be extracted with statutory confidence. Please enter details manually.',
-          extractionStatus: 'FAILED',
-        },
-        HttpStatus.UNPROCESSABLE_ENTITY
-      );
+      return { ok: false, upstreamStatus: 503 };
     }
 
-    let lastError = '';
-    let lastStatus = 500;
+    let primaryStatus = 500;
 
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${apiKey}`;
-      const prompt = `You are an expert UAE Trade Licence and commercial register document parser.
-Analyze this document image and extract:
-- licenseNumber: string (official licence or registration number)
-- businessName: string (legal company / trade name in English)
-- businessNameAr: string (trade name in Arabic if present, otherwise empty)
-- legalForm: string (e.g. 'Limited Liability Company (LLC)', 'Free Zone Company (FZCO)', 'Sole Establishment')
-- jurisdiction: string (e.g. 'Mainland (Dubai)', 'DMCC Free Zone', 'ADGM', 'DIFC', 'Sharjah Mainland', etc.)
-- issueDate: string in YYYY-MM-DD format (e.g. '2024-01-15')
-- expiryDate: string in YYYY-MM-DD format (e.g. '2025-01-14')
+    for (let i = 0; i < OcrService.VISION_MODELS.length; i++) {
+      const model = OcrService.VISION_MODELS[i];
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-Return ONLY a valid JSON object matching this schema. If the image is not a trade license or unreadable, return {"error": "UNREADABLE"}.`;
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { inlineData: { mimeType, data: cleanB64 } },
-                { text: prompt },
-              ],
-            },
-          ],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.1,
-          },
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (rawJson) {
-          const parsed = JSON.parse(rawJson);
-          if (parsed.error === 'UNREADABLE' || (!parsed.businessName && !parsed.businessNameAr && !parsed.licenseNumber)) {
-            throw new HttpException(
-              {
-                statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
-                error: 'Unprocessable Entity',
-                message:
-                  'Document could not be recognized as an authentic UAE trade license. Please upload a clearer copy or enter details manually.',
-                extractionStatus: 'FAILED',
-              },
-              HttpStatus.UNPROCESSABLE_ENTITY
-            );
-          }
-
-          return {
-            licenseNumber: parsed.licenseNumber || '',
-            businessName: parsed.businessName || parsed.businessNameAr || '',
-            businessNameAr: parsed.businessNameAr || '',
-            legalForm: parsed.legalForm || 'Limited Liability Company (LLC)',
-            jurisdiction: parsed.jurisdiction || 'Mainland (Dubai)',
-            issueDate: normalizeDateToISO(parsed.issueDate) || parsed.issueDate || '',
-            expiryDate: normalizeDateToISO(parsed.expiryDate) || parsed.expiryDate || '',
-            extractionMethod: 'GEMINI_3_5_FLASH_LITE',
-            extractionStatus: 'SUCCESS',
-          };
-        }
-      } else {
-        const errBody = await res.text().catch(() => '');
-        lastStatus = res.status;
-        lastError = errBody.slice(0, 300);
-        console.warn(`Primary Gemini 3.5 Flash-Lite failed (HTTP ${res.status}):`, errBody);
-
-        // Fallback to gemini-1.5-flash
-        const fbUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-        const fbRes = await fetch(fbUrl, {
+      try {
+        const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -245,48 +172,124 @@ Return ONLY a valid JSON object matching this schema. If the image is not a trad
           }),
         });
 
-        if (fbRes.ok) {
-          const fbData = await fbRes.json();
-          const fbJson = fbData.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (fbJson) {
-            const parsed = JSON.parse(fbJson);
-            if (parsed && parsed.error !== 'UNREADABLE' && (parsed.businessName || parsed.businessNameAr || parsed.licenseNumber)) {
-              return {
-                licenseNumber: parsed.licenseNumber || '',
-                businessName: parsed.businessName || parsed.businessNameAr || '',
-                businessNameAr: parsed.businessNameAr || '',
-                legalForm: parsed.legalForm || 'Limited Liability Company (LLC)',
-                jurisdiction: parsed.jurisdiction || 'Mainland (Dubai)',
-                issueDate: normalizeDateToISO(parsed.issueDate) || parsed.issueDate || '',
-                expiryDate: normalizeDateToISO(parsed.expiryDate) || parsed.expiryDate || '',
-                extractionMethod: 'GEMINI_1_5_FLASH_FALLBACK',
-                extractionStatus: 'SUCCESS',
-              };
+        if (res.ok) {
+          const data = await res.json();
+          const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (rawText) {
+            // Strip optional markdown code fences before JSON parsing
+            const sanitized = rawText
+              .trim()
+              .replace(/^```(?:json)?\s*/i, '')
+              .replace(/\s*```$/i, '');
+            try {
+              const parsed = JSON.parse(sanitized);
+              if (parsed !== null && parsed !== undefined) {
+                return { ok: true, parsed, model };
+              }
+            } catch (parseErr: any) {
+              console.warn(`OCR model ${model} returned non-JSON payload:`, parseErr?.message || parseErr);
+              if (i === 0) primaryStatus = 422;
             }
           }
         } else {
-          const fbErr = await fbRes.text().catch(() => '');
-          lastStatus = fbRes.status;
-          lastError = fbErr.slice(0, 300);
-          console.warn(`Fallback Gemini 1.5 Flash failed (HTTP ${fbRes.status}):`, fbErr);
+          const errBody = await res.text().catch(() => '');
+          if (i === 0) primaryStatus = res.status;
+          console.warn(`OCR model ${model} failed (HTTP ${res.status}):`, errBody.slice(0, 400));
         }
+      } catch (err: any) {
+        if (i === 0) primaryStatus = 502;
+        console.warn(`OCR model ${model} network error:`, err?.message || err);
       }
-    } catch (err: any) {
-      if (err instanceof HttpException) throw err;
-      console.warn('Backend Gemini OCR network error:', err?.message || err);
-      lastError = err?.message || String(err);
     }
 
-    // Explicit non-fabrication failure with exact Google API diagnostic passthrough
-    throw new HttpException(
-      {
-        statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
-        error: 'Unprocessable Entity',
-        message: `Trade license extraction notice (${lastStatus}): ${lastError || 'The document could not be parsed with statutory confidence.'}`,
-        extractionStatus: 'FAILED',
-      },
-      HttpStatus.UNPROCESSABLE_ENTITY
-    );
+    return { ok: false, upstreamStatus: primaryStatus };
+  }
+
+  /**
+   * Extracts UAE Trade License details using server-side Gemini Flash
+   * Guaranteed non-fabrication: Never returns fake numbers if extraction fails.
+   */
+  public async extractTradeLicense(dto: ExtractTradeLicenseDto, organisationId: string) {
+    this.checkRateLimit(organisationId);
+
+    // Validate payload magic bytes against spoofing and use the verified MIME type
+    // so client-supplied headers (e.g. 'image/jpg' or missing PDF/image types) never mismatch the bytes.
+    const detectedMime = this.validateMagicBytes(dto.imageBase64);
+    const mimeType = detectedMime;
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    const cleanB64 = dto.imageBase64.replace(/^data:[a-zA-Z0-9\/\-+.]+;base64,/, '').trim();
+
+    if (!apiKey) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+          error: 'Unprocessable Entity',
+          message:
+            'AI Vision OCR service is temporarily unavailable. Document text could not be extracted with statutory confidence. Please enter details manually.',
+          extractionStatus: 'FAILED',
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY
+      );
+    }
+
+    const prompt = `You are an expert UAE Trade Licence and commercial register document parser.
+Analyze this document image and extract:
+- licenseNumber: string (official licence or registration number)
+- businessName: string (legal company / trade name in English)
+- businessNameAr: string (trade name in Arabic if present, otherwise empty)
+- legalForm: string (e.g. 'Limited Liability Company (LLC)', 'Free Zone Company (FZCO)', 'Sole Establishment')
+- jurisdiction: string (e.g. 'Mainland (Dubai)', 'DMCC Free Zone', 'ADGM', 'DIFC', 'Sharjah Mainland', etc.)
+- issueDate: string in YYYY-MM-DD format (e.g. '2024-01-15')
+- expiryDate: string in YYYY-MM-DD format (e.g. '2025-01-14')
+
+Return ONLY a valid JSON object matching this schema. If the image is not a trade license or unreadable, return {"error": "UNREADABLE"}.`;
+
+    const result = await this.callGeminiVisionJson(mimeType, cleanB64, prompt);
+
+    if (!result.ok) {
+      // Explicit non-fabrication failure without leaking raw Google API JSON payloads to clients
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+          error: 'Unprocessable Entity',
+          message:
+            'Could not extract Trade License details automatically. Please upload a clearer PDF or image, or enter details manually.',
+          upstreamStatus: (result as { ok: false; upstreamStatus: number }).upstreamStatus,
+          extractionStatus: 'FAILED',
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY
+      );
+    }
+
+    const parsed = result.parsed;
+    if (
+      parsed.error === 'UNREADABLE' ||
+      (!parsed.businessName && !parsed.businessNameAr && !parsed.licenseNumber)
+    ) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+          error: 'Unprocessable Entity',
+          message:
+            'Document could not be recognized as an authentic UAE trade license. Please upload a clearer copy or enter details manually.',
+          extractionStatus: 'FAILED',
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY
+      );
+    }
+
+    return {
+      licenseNumber: parsed.licenseNumber || '',
+      businessName: parsed.businessName || parsed.businessNameAr || '',
+      businessNameAr: parsed.businessNameAr || '',
+      legalForm: parsed.legalForm || 'Limited Liability Company (LLC)',
+      jurisdiction: parsed.jurisdiction || 'Mainland (Dubai)',
+      issueDate: normalizeDateToISO(parsed.issueDate) || parsed.issueDate || '',
+      expiryDate: normalizeDateToISO(parsed.expiryDate) || parsed.expiryDate || '',
+      extractionMethod: result.model.toUpperCase().replace(/[^A-Z0-9]+/g, '_'),
+      extractionStatus: 'SUCCESS',
+    };
   }
 
   /**
@@ -296,8 +299,9 @@ Return ONLY a valid JSON object matching this schema. If the image is not a trad
   public async extractReceipt(dto: ExtractReceiptDto, organisationId: string) {
     this.checkRateLimit(organisationId);
 
+    // Always prefer magic-byte-verified MIME type over client-supplied MIME header
     const detectedMime = this.validateMagicBytes(dto.imageBase64);
-    const mimeType = dto.mimeType || detectedMime;
+    const mimeType = detectedMime;
 
     const apiKey = process.env.GEMINI_API_KEY;
     const cleanB64 = dto.imageBase64.replace(/^data:[a-zA-Z0-9\/\-+.]+;base64,/, '').trim();
@@ -315,9 +319,7 @@ Return ONLY a valid JSON object matching this schema. If the image is not a trad
       );
     }
 
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${apiKey}`;
-      const prompt = `You are an expert UAE VAT receipt and tax invoice parser.
+    const prompt = `You are an expert UAE VAT receipt and tax invoice parser.
 Analyze this receipt or tax invoice image and extract:
 - supplierName: string (official merchant / trade name, e.g. 'Carrefour Hypermarket LLC')
 - supplierTrn: string (15-digit UAE Tax Registration Number starting with 100, if present)
@@ -335,106 +337,87 @@ Analyze this receipt or tax invoice image and extract:
 
 Return ONLY a valid JSON object matching this schema. If unreadable, return {"error": "UNREADABLE"}.`;
 
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { inlineData: { mimeType, data: cleanB64 } },
-                { text: prompt },
-              ],
-            },
-          ],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.1,
-          },
-        }),
-      });
+    const result = await this.callGeminiVisionJson(mimeType, cleanB64, prompt);
 
-      if (res.ok) {
-        const data = await res.json();
-        const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (rawJson) {
-          const parsed = JSON.parse(rawJson);
-          const totalVal = parsed.totalAmount !== undefined ? parsed.totalAmount : parsed.totalAmountAED;
-          if (parsed.error === 'UNREADABLE' || totalVal === undefined) {
-            throw new HttpException(
-              {
-                statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
-                error: 'Unprocessable Entity',
-                message:
-                  'Tax invoice amounts and TRN could not be read with statutory certainty. Please enter expense lines manually.',
-                extractionStatus: 'FAILED',
-              },
-              HttpStatus.UNPROCESSABLE_ENTITY
-            );
-          }
-
-          const supplierName = parsed.supplierName || parsed.merchantName || 'Merchant';
-          const trn = parsed.supplierTrn || parsed.trn || '';
-          const receiptNo = parsed.receiptNumber || parsed.invoiceNumber || '';
-          const recDate = parsed.receiptDate || parsed.invoiceDate || new Date().toISOString().split('T')[0];
-          const curr = parsed.currency || 'AED';
-          const totalAmt = Number(totalVal) || 0;
-          const subtotalAmt = Number(parsed.subtotal !== undefined ? parsed.subtotal : parsed.amountExclVatAED) || Number((totalAmt / 1.05).toFixed(2));
-          const vatAmt = Number(parsed.vatAmount !== undefined ? parsed.vatAmount : parsed.vatAED) || Number((totalAmt - subtotalAmt).toFixed(2));
-          const category = parsed.category || 'OFFICE_SUPPLIES';
-          const lineItems = Array.isArray(parsed.lineItems) ? parsed.lineItems : [];
-          const confidence = parsed.confidence || {
-            overall: 95,
-            supplierName: 96,
-            trn: trn ? 98 : 0,
-            amounts: 94,
-            date: 95,
-          };
-
-          return {
-            merchantName: supplierName,
-            supplierName,
-            trn,
-            supplierTrn: trn,
-            invoiceDate: recDate,
-            receiptDate: recDate,
-            invoiceNumber: receiptNo,
-            receiptNumber: receiptNo,
-            currency: curr,
-            amountExclVatAED: subtotalAmt,
-            subtotal: subtotalAmt,
-            vatAED: vatAmt,
-            vatAmount: vatAmt,
-            totalAmountAED: totalAmt,
-            totalAmount: totalAmt,
-            vatRate: parsed.vatRate ?? 5,
-            category,
-            description: parsed.description || `Purchase from ${supplierName}`,
-            lineItems,
-            confidence,
-            isVerified: false,
-            disclaimer: 'Unverified extracted data. Review and confirm before adding to financial records. Does not verify FTA registration.',
-            extractionMethod: 'GEMINI_SERVER_VISION',
-            extractionStatus: 'SUCCESS' as const,
-            rawOcrJson: parsed,
-          };
-        }
-      }
-    } catch (err: any) {
-      if (err instanceof HttpException) throw err;
-      console.warn('Backend Receipt OCR network error:', err?.message || err);
+    if (!result.ok) {
+      // Explicit non-fabrication failure: Do NOT return fictitious VAT amounts or fake TRN
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+          error: 'Unprocessable Entity',
+          message:
+            'Receipt extraction failed: Tax invoice figures could not be extracted with confidence. Please enter amounts manually.',
+          upstreamStatus: (result as { ok: false; upstreamStatus: number }).upstreamStatus,
+          extractionStatus: 'FAILED',
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY
+      );
     }
 
-    // Explicit non-fabrication failure: Do NOT return fictitious VAT amounts or fake TRN
-    throw new HttpException(
-      {
-        statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
-        error: 'Unprocessable Entity',
-        message:
-          'Receipt extraction failed: Tax invoice figures could not be extracted with confidence. Please enter amounts manually.',
-        extractionStatus: 'FAILED',
-      },
-      HttpStatus.UNPROCESSABLE_ENTITY
-    );
+    const parsed = result.parsed;
+    const totalVal = parsed.totalAmount !== undefined ? parsed.totalAmount : parsed.totalAmountAED;
+    if (parsed.error === 'UNREADABLE' || totalVal === undefined) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+          error: 'Unprocessable Entity',
+          message:
+            'Tax invoice amounts and TRN could not be read with statutory certainty. Please enter expense lines manually.',
+          extractionStatus: 'FAILED',
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY
+      );
+    }
+
+    const supplierName = parsed.supplierName || parsed.merchantName || 'Merchant';
+    const trn = parsed.supplierTrn || parsed.trn || '';
+    const receiptNo = parsed.receiptNumber || parsed.invoiceNumber || '';
+    const recDate = parsed.receiptDate || parsed.invoiceDate || new Date().toISOString().split('T')[0];
+    const curr = parsed.currency || 'AED';
+    const totalAmt = Number(totalVal) || 0;
+    const subtotalAmt =
+      Number(parsed.subtotal !== undefined ? parsed.subtotal : parsed.amountExclVatAED) ||
+      Number((totalAmt / 1.05).toFixed(2));
+    const vatAmt =
+      Number(parsed.vatAmount !== undefined ? parsed.vatAmount : parsed.vatAED) ||
+      Number((totalAmt - subtotalAmt).toFixed(2));
+    const category = parsed.category || 'OFFICE_SUPPLIES';
+    const lineItems = Array.isArray(parsed.lineItems) ? parsed.lineItems : [];
+    const confidence = parsed.confidence || {
+      overall: 95,
+      supplierName: 96,
+      trn: trn ? 98 : 0,
+      amounts: 94,
+      date: 95,
+    };
+
+    return {
+      merchantName: supplierName,
+      supplierName,
+      trn,
+      supplierTrn: trn,
+      invoiceDate: recDate,
+      receiptDate: recDate,
+      invoiceNumber: receiptNo,
+      receiptNumber: receiptNo,
+      currency: curr,
+      amountExclVatAED: subtotalAmt,
+      subtotal: subtotalAmt,
+      vatAED: vatAmt,
+      vatAmount: vatAmt,
+      totalAmountAED: totalAmt,
+      totalAmount: totalAmt,
+      vatRate: parsed.vatRate ?? 5,
+      category,
+      description: parsed.description || `Purchase from ${supplierName}`,
+      lineItems,
+      confidence,
+      isVerified: false,
+      disclaimer:
+        'Unverified extracted data. Review and confirm before adding to financial records. Does not verify FTA registration.',
+      extractionMethod: 'GEMINI_SERVER_VISION',
+      extractionStatus: 'SUCCESS' as const,
+      rawOcrJson: parsed,
+    };
   }
 }

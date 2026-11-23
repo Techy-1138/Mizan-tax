@@ -188,7 +188,7 @@ async function runSecurityTests() {
     'TC-SEC-09: Trade license stored with authenticated organisationId boundary'
   );
 
-  // TC-SEC-10: Cross-tenant update blocked
+  // TC-SEC-10: Cross-tenant onboarding/overwrite blocked with 409 Conflict & masked email
   let crossTenantUpdateBlocked = false;
   try {
     await businessService.createOrUpdateTradeLicense(
@@ -202,14 +202,19 @@ async function runSecurityTests() {
         expiryDate: '2027-01-14',
         organisationId: userB.organisationId,
       },
-      userB.organisationId // User B attempts to overwrite User A's license
+      userB.organisationId, // User B attempts to onboard/overwrite User A's license
+      userB.email
     );
   } catch (err: any) {
-    crossTenantUpdateBlocked = err.status === 403 || err.message?.includes('Cross-tenant');
+    const res = err.getResponse?.() || {};
+    crossTenantUpdateBlocked =
+      (err.status === 409 && res.code === 'ENTITY_ALREADY_REGISTERED') ||
+      err.status === 403 ||
+      err.message?.includes('Cross-tenant');
   }
   assert(
     crossTenantUpdateBlocked,
-    "TC-SEC-10: Cross-tenant modification of another organisation's license is blocked with 403 Forbidden"
+    "TC-SEC-10: Cross-tenant onboarding/modification of another organisation's license is blocked (409 Conflict / 403 Forbidden)"
   );
 
   // TC-SEC-11: Cross-tenant read blocked

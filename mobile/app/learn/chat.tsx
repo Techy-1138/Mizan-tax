@@ -29,6 +29,8 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   citations?: string[];
+  /** Optimistic delivery status for user messages */
+  status?: 'sending' | 'sent' | 'failed';
 }
 
 const FALLBACK_PROMPTS_EN = [
@@ -121,20 +123,29 @@ export default function AiTaxChatScreen() {
     setThreadsOpen(false);
   };
 
-  /** Sends user message to persistent conversation thread */
-  const handleSend = async (overrideText?: string) => {
+  /** Sends user message to persistent conversation thread with inline retry/rollback support */
+  const handleSend = async (overrideText?: string, retryMessageId?: string) => {
     const text = (overrideText ?? inputText).trim();
     if (!text || sending) return;
 
     setError(null);
-    if (!overrideText) setInputText('');
+    if (!overrideText && !retryMessageId) setInputText('');
 
-    const optimisticUser: ChatMessage = {
-      id: `u-${Date.now()}`,
-      role: 'user',
-      content: text,
-    };
-    setMessages((prev) => [...prev, optimisticUser]);
+    const targetId = retryMessageId || `u-${Date.now()}`;
+    if (retryMessageId) {
+      // Flip failed optimistic message back into sending state without duplicating bubble
+      setMessages((prev) =>
+        prev.map((m) => (m.id === retryMessageId ? { ...m, status: 'sending' } : m))
+      );
+    } else {
+      const optimisticUser: ChatMessage = {
+        id: targetId,
+        role: 'user',
+        content: text,
+        status: 'sending',
+      };
+      setMessages((prev) => [...prev, optimisticUser]);
+    }
     setSending(true);
 
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
@@ -177,9 +188,16 @@ export default function AiTaxChatScreen() {
           reply?.citations ||
           undefined,
       };
-      setMessages((prev) => [...prev, assistantMsg]);
+      setMessages((prev) => [
+        ...prev.map((m) => (m.id === targetId ? { ...m, status: 'sent' as const } : m)),
+        assistantMsg,
+      ]);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
     } catch (err: any) {
+      // Mark the optimistic user message as failed so user can retry or remove it cleanly
+      setMessages((prev) =>
+        prev.map((m) => (m.id === targetId ? { ...m, status: 'failed' as const } : m))
+      );
       setError(
         err?.message ||
           (isRTL
@@ -189,6 +207,15 @@ export default function AiTaxChatScreen() {
     } finally {
       setSending(false);
     }
+  };
+
+  /** Removes a failed optimistic user message and restores its text to the composer */
+  const handleRemoveFailedMessage = (msg: ChatMessage) => {
+    setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+    if (!inputText.trim()) {
+      setInputText(msg.content);
+    }
+    setError(null);
   };
 
   return (
@@ -286,18 +313,22 @@ export default function AiTaxChatScreen() {
 
           {messages.map((msg) => {
             const isUser = msg.role === 'user';
+            const isFailed = isUser && msg.status === 'failed';
             return (
               <SlideIn
                 key={msg.id}
                 from="bottom"
                 distance={8}
-                style={[styles.msgRow, isUser ? styles.msgRowUser : styles.msgRowAi]}
+                style={[styles.msgCol, isUser ? styles.msgColUser : styles.msgColAi]}
               >
                 <View
                   style={[
                     styles.bubble,
                     isUser
-                      ? { backgroundColor: colors.brand.primary }
+                      ? {
+                          backgroundColor: colors.brand.primary,
+                          opacity: isFailed ? 0.72 : 1,
+                        }
                       : {
                           backgroundColor: colors.neutral.surface,
                           borderColor: colors.neutral.border,
@@ -317,6 +348,39 @@ export default function AiTaxChatScreen() {
                     </View>
                   ) : null}
                 </View>
+
+                {isFailed ? (
+                  <View style={styles.failedActions}>
+                    <Pressable
+                      onPress={() => handleSend(msg.content, msg.id)}
+                      style={[
+                        styles.retryPill,
+                        {
+                          backgroundColor: colors.neutral.surface,
+                          borderColor: colors.neutral.borderStrong,
+                        },
+                      ]}
+                    >
+                      <AppText variant="caption" weight="semiBold">
+                        {isRTL ? 'إعادة الإرسال' : 'Tap to Retry'}
+                      </AppText>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => handleRemoveFailedMessage(msg)}
+                      style={[
+                        styles.retryPill,
+                        {
+                          backgroundColor: colors.neutral.surfaceSubtle,
+                          borderColor: colors.neutral.border,
+                        },
+                      ]}
+                    >
+                      <AppText variant="caption" tone="secondary">
+                        {isRTL ? 'حذف' : 'Remove'}
+                      </AppText>
+                    </Pressable>
+                  </View>
+                ) : null}
               </SlideIn>
             );
           })}
@@ -445,13 +509,14 @@ const styles = StyleSheet.create({
   },
   topCenter: { alignItems: 'center' },
   chatContent: {
-    padding: spacing.md,
-    gap: spacing.sm,
+    padding: spacing.lg,
+    gap: spacing.md,
   },
   promptWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.xs,
+    marginBottom: spacing.xs,
   },
   promptChip: {
     paddingHorizontal: spacing.sm,
@@ -462,17 +527,28 @@ const styles = StyleSheet.create({
   emptyBox: {
     borderWidth: borders.hairline,
     borderRadius: radii.lg,
-    padding: spacing.md,
-    gap: 4,
+    padding: spacing.lg,
+    gap: spacing.xxs + 2,
   },
-  msgRow: { flexDirection: 'row' },
-  msgRowUser: { justifyContent: 'flex-end' },
-  msgRowAi: { justifyContent: 'flex-start' },
+  msgCol: { gap: spacing.xxs + 2 },
+  msgColUser: { alignItems: 'flex-end' },
+  msgColAi: { alignItems: 'flex-start' },
   bubble: {
     maxWidth: '86%',
     borderRadius: radii.lg,
-    padding: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
     gap: spacing.xs,
+  },
+  failedActions: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  retryPill: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs,
+    borderRadius: radii.pill,
+    borderWidth: borders.hairline,
   },
   citeRow: {
     flexDirection: 'row',

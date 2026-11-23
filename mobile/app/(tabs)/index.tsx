@@ -15,11 +15,11 @@ import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
 import { AppStorage } from '../../src/utils/storage';
-import { borders, radii, spacing } from '../../src/theme/tokens';
+import { borders, layoutSpacing, radii, spacing } from '../../src/theme/tokens';
 
 // Per-entity AsyncStorage cache key prefix for instant Stale-While-Revalidate hydration
 const DASHBOARD_CACHE_PREFIX = 'mizan_dash_cache_';
-import { AppText, Badge, Button, Card, ModalSheet } from '../../src/ui';
+import { AppText, Badge, Button, Card, DashboardSkeleton, ModalSheet } from '../../src/ui';
 
 interface DashboardState {
   readinessScore: number;
@@ -70,6 +70,8 @@ export default function DashboardScreen() {
   const { businesses, activeBusiness, setActiveBusinessId } = useBusiness();
 
   const [data, setData] = useState<DashboardState>(DEFAULT_DASHBOARD);
+  // Tracks whether SWR cache or fresh API data has arrived for the active entity to avoid flashing fake 85/100 defaults
+  const [hasHydratedOrFetched, setHasHydratedOrFetched] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
@@ -121,6 +123,7 @@ export default function DashboardScreen() {
       };
 
       setData(nextState);
+      setHasHydratedOrFetched(true);
 
       // Persist fresh overview per businessId so subsequent mounts render at 0ms
       if (overviewRes.status === 'fulfilled') {
@@ -130,6 +133,7 @@ export default function DashboardScreen() {
         ).catch(() => {});
       }
     } finally {
+      setHasHydratedOrFetched(true);
       setRefreshing(false);
     }
   }, [activeBusiness?.id]);
@@ -139,8 +143,12 @@ export default function DashboardScreen() {
     let cancelled = false;
     if (!activeBusiness?.id) {
       setData(DEFAULT_DASHBOARD);
+      setHasHydratedOrFetched(true);
       return;
     }
+
+    // Show skeleton until either local cache hits or the initial network call resolves
+    setHasHydratedOrFetched(false);
 
     (async () => {
       try {
@@ -150,6 +158,7 @@ export default function DashboardScreen() {
         if (cancelled) return;
         if (cachedRaw) {
           setData(JSON.parse(cachedRaw));
+          setHasHydratedOrFetched(true);
         } else {
           // Reset cleanly when switching to an entity with no prior local cache
           setData(DEFAULT_DASHBOARD);
@@ -184,197 +193,208 @@ export default function DashboardScreen() {
           />
         }
       >
-        {/* Top Entity Switcher & Sync Status */}
-        <View style={styles.headerRow}>
-          <Pressable
-            onPress={() => businesses.length > 0 && setSwitcherOpen(true)}
-            style={styles.entityTrigger}
-          >
-            <AppText variant="h3" weight="bold" numberOfLines={1}>
-              {activeBusiness?.legalName || (isRTL ? 'منشأتي' : 'My Business')} ▾
-            </AppText>
-            <AppText variant="caption" tone="muted" tabular>
-              {activeBusiness?.tradeLicenseNumber || '—'} ·{' '}
-              {activeBusiness?.jurisdictionType || 'MAINLAND'}
-            </AppText>
-          </Pressable>
-
-          <Badge
-            label={data.synced ? (isRTL ? 'متصل' : 'Synced') : isRTL ? 'محلي' : 'Offline'}
-            variant={data.synced ? 'outline' : 'muted'}
-          />
-        </View>
-
-        {/* Inverted Hero Tax Readiness Card (Tap for Breakdown) */}
-        <Pressable onPress={() => router.push('/readiness')}>
-          <Card variant="inverted" style={styles.heroCard}>
-            <View style={styles.heroTop}>
-              <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
-                {isRTL ? 'مؤشر الجاهزية الضريبية' : 'TAX READINESS SCORE'}
+        {/* Zone 1: Top Entity Switcher & Inverted Hero Readiness Card */}
+        <View style={styles.zoneGroup}>
+          <View style={styles.headerRow}>
+            <Pressable
+              onPress={() => businesses.length > 0 && setSwitcherOpen(true)}
+              style={styles.entityTrigger}
+            >
+              <AppText variant="h3" weight="bold" numberOfLines={1}>
+                {activeBusiness?.legalName || (isRTL ? 'منشأتي' : 'My Business')} ▾
               </AppText>
-              <View style={[styles.heroBadge, { borderColor: colors.brand.heroText }]}>
-                <AppText variant="caption" weight="semiBold" tone="inverted" tabular>
-                  {data.readinessScore} / 100
-                </AppText>
-              </View>
-            </View>
+              <AppText variant="caption" tone="muted" tabular>
+                {activeBusiness?.tradeLicenseNumber || '—'} ·{' '}
+                {activeBusiness?.jurisdictionType || 'MAINLAND'}
+              </AppText>
+            </Pressable>
 
-            <View style={styles.heroMetricsRow}>
-              <View>
-                <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
-                  {isRTL ? 'صافي الربح (سنوي)' : 'Net Profit (YTD)'}
-                </AppText>
-                <AppText variant="display" tone="inverted" tabular>
-                  {formatAED(data.netProfitAED)}
-                </AppText>
-              </View>
-              <View style={styles.heroRightMetric}>
-                <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
-                  {isRTL ? 'ضريبة الشركات المقدرة' : 'Est. CT'}
-                </AppText>
-                <AppText variant="h3" tone="inverted" tabular>
-                  {formatAED(data.estimatedCtAED)}
-                </AppText>
-              </View>
-            </View>
-          </Card>
-        </Pressable>
-
-        {/* 2-Column KPI Grid */}
-        <View style={styles.kpiRow}>
-          <Card style={styles.kpiCard}>
-            <AppText variant="caption" tone="secondary">
-              {isRTL ? 'الإيرادات' : 'Revenue'}
-            </AppText>
-            <AppText variant="h3" weight="bold" tabular style={styles.kpiValue}>
-              {formatAED(data.revenueAED)}
-            </AppText>
-          </Card>
-
-          <Card style={styles.kpiCard}>
-            <AppText variant="caption" tone="secondary">
-              {isRTL ? 'المصروفات' : 'Expenses'}
-            </AppText>
-            <AppText variant="h3" weight="bold" tabular style={styles.kpiValue}>
-              {formatAED(data.expensesAED)}
-            </AppText>
-          </Card>
-        </View>
-
-        {/* 3 Clear Quick Actions (Bill Client / Log Expense / File Tax) */}
-        <View style={styles.qaRow}>
-          <Pressable
-            onPress={() => router.push('/(tabs)/invoices')}
-            style={[
-              styles.qaBtn,
-              { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
-            ]}
-          >
-            <Ionicons name="arrow-up-outline" size={18} color={colors.neutral.textPrimary} />
-            <AppText variant="caption" weight="semiBold">
-              {isRTL ? 'فوترة عميل' : 'Bill Client'}
-            </AppText>
-            <AppText variant="caption" tone="muted">
-              {isRTL ? 'إيرادات' : 'Income'}
-            </AppText>
-          </Pressable>
-
-          <Pressable
-            onPress={() => router.push('/(tabs)/books')}
-            style={[
-              styles.qaBtn,
-              { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
-            ]}
-          >
-            <Ionicons name="camera-outline" size={18} color={colors.neutral.textPrimary} />
-            <AppText variant="caption" weight="semiBold">
-              {isRTL ? 'تسجيل مصروف' : 'Log Expense'}
-            </AppText>
-            <AppText variant="caption" tone="muted">
-              {isRTL ? 'مسح إيصال' : 'Scan Cost'}
-            </AppText>
-          </Pressable>
-
-          <Pressable
-            onPress={() => router.push('/(tabs)/tax')}
-            style={[
-              styles.qaBtn,
-              { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
-            ]}
-          >
-            <Ionicons
-              name="shield-checkmark-outline"
-              size={18}
-              color={colors.neutral.textPrimary}
+            <Badge
+              label={data.synced ? (isRTL ? 'متصل' : 'Synced') : isRTL ? 'محلي' : 'Offline'}
+              variant={data.synced ? 'outline' : 'muted'}
             />
-            <AppText variant="caption" weight="semiBold">
-              {isRTL ? 'تقديم إقرار' : 'File Tax'}
-            </AppText>
-            <AppText variant="caption" tone="muted">
-              {isRTL ? 'ضريبة' : 'VAT · CT'}
-            </AppText>
-          </Pressable>
+          </View>
+
+          {!hasHydratedOrFetched ? (
+            <DashboardSkeleton />
+          ) : (
+            <Pressable onPress={() => router.push('/readiness')}>
+              <Card variant="inverted" paddingSize="lg" style={styles.heroCard}>
+                <View style={styles.heroTop}>
+                  <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
+                    {isRTL ? 'مؤشر الجاهزية الضريبية' : 'TAX READINESS SCORE'}
+                  </AppText>
+                  <View style={[styles.heroBadge, { borderColor: colors.brand.heroText }]}>
+                    <AppText variant="caption" weight="semiBold" tone="inverted" tabular>
+                      {data.readinessScore} / 100
+                    </AppText>
+                  </View>
+                </View>
+
+                <View style={styles.heroMetricsRow}>
+                  <View>
+                    <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
+                      {isRTL ? 'صافي الربح (سنوي)' : 'Net Profit (YTD)'}
+                    </AppText>
+                    <AppText variant="display" tone="inverted" tabular>
+                      {formatAED(data.netProfitAED)}
+                    </AppText>
+                  </View>
+                  <View style={styles.heroRightMetric}>
+                    <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
+                      {isRTL ? 'ضريبة الشركات المقدرة' : 'Est. CT'}
+                    </AppText>
+                    <AppText variant="h3" tone="inverted" tabular>
+                      {formatAED(data.estimatedCtAED)}
+                    </AppText>
+                  </View>
+                </View>
+              </Card>
+            </Pressable>
+          )}
         </View>
 
-        {/* Next Statutory Deadline */}
-        <Card style={styles.sectionCard}>
-          <View style={styles.sectionHeader}>
-            <AppText variant="caption" weight="semiBold" tone="secondary">
-              {isRTL ? 'الموعد القانوني القادم' : 'NEXT STATUTORY DEADLINE'}
-            </AppText>
-            {data.nextDeadline ? (
-              <Badge label={`${data.nextDeadline.daysRemaining}d left`} variant="solid" />
-            ) : null}
-          </View>
-          {data.nextDeadline ? (
-            <>
-              <AppText variant="body" weight="semiBold">
-                {data.nextDeadline.title}
-              </AppText>
-              <AppText variant="caption" tone="secondary">
-                {data.nextDeadline.legalReference} · Penalty Shield:{' '}
-                {formatAED(data.nextDeadline.potentialPenaltyAED)}
-              </AppText>
-            </>
-          ) : (
-            <AppText variant="bodySmall" tone="secondary">
-              {isRTL
-                ? 'لا توجد مواعيد مستحقة حالياً. قم بتحديث الإقرارات من تبويب الضرائب.'
-                : 'No immediate statutory filings due. Run an assessment in the Tax tab.'}
-            </AppText>
-          )}
-        </Card>
+        {hasHydratedOrFetched ? (
+          <>
+            {/* Zone 2: 2-Column KPI Grid & 3 Clear Quick Actions */}
+            <View style={styles.zoneGroup}>
+              <View style={styles.kpiRow}>
+                <Card style={styles.kpiCard}>
+                  <AppText variant="caption" tone="secondary">
+                    {isRTL ? 'الإيرادات' : 'Revenue'}
+                  </AppText>
+                  <AppText variant="h3" weight="bold" tabular style={styles.kpiValue}>
+                    {formatAED(data.revenueAED)}
+                  </AppText>
+                </Card>
 
-        {/* Open Compliance Actions */}
-        <Card style={styles.sectionCard}>
-          <AppText variant="caption" weight="semiBold" tone="secondary">
-            {isRTL ? 'إجراءات الامتثال المفتوحة' : 'COMPLIANCE ACTIONS'}
-          </AppText>
-          {data.actions.length === 0 ? (
-            <AppText variant="bodySmall" tone="secondary">
-              {isRTL
-                ? 'سجلك نظيف حالياً — لا توجد ملاحظات معلقة.'
-                : 'All clear — no open compliance findings for this entity.'}
-            </AppText>
-          ) : (
-            data.actions.map((item) => (
-              <View
-                key={item.id}
-                style={[styles.actionRow, { borderTopColor: colors.neutral.border }]}
-              >
-                <View style={styles.actionInfo}>
-                  <AppText variant="bodySmall" weight="semiBold">
-                    {item.title}
+                <Card style={styles.kpiCard}>
+                  <AppText variant="caption" tone="secondary">
+                    {isRTL ? 'المصروفات' : 'Expenses'}
+                  </AppText>
+                  <AppText variant="h3" weight="bold" tabular style={styles.kpiValue}>
+                    {formatAED(data.expensesAED)}
+                  </AppText>
+                </Card>
+              </View>
+
+              <View style={styles.qaRow}>
+                <Pressable
+                  onPress={() => router.push('/(tabs)/invoices')}
+                  style={[
+                    styles.qaBtn,
+                    { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
+                  ]}
+                >
+                  <Ionicons name="arrow-up-outline" size={18} color={colors.neutral.textPrimary} />
+                  <AppText variant="caption" weight="semiBold">
+                    {isRTL ? 'فوترة عميل' : 'Bill Client'}
                   </AppText>
                   <AppText variant="caption" tone="muted">
-                    +{item.impactScore} readiness pts
+                    {isRTL ? 'إيرادات' : 'Income'}
                   </AppText>
-                </View>
-                <Badge label={item.status} variant="outline" />
+                </Pressable>
+
+                <Pressable
+                  onPress={() => router.push('/(tabs)/books')}
+                  style={[
+                    styles.qaBtn,
+                    { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
+                  ]}
+                >
+                  <Ionicons name="camera-outline" size={18} color={colors.neutral.textPrimary} />
+                  <AppText variant="caption" weight="semiBold">
+                    {isRTL ? 'تسجيل مصروف' : 'Log Expense'}
+                  </AppText>
+                  <AppText variant="caption" tone="muted">
+                    {isRTL ? 'مسح إيصال' : 'Scan Cost'}
+                  </AppText>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => router.push('/(tabs)/tax')}
+                  style={[
+                    styles.qaBtn,
+                    { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
+                  ]}
+                >
+                  <Ionicons
+                    name="shield-checkmark-outline"
+                    size={18}
+                    color={colors.neutral.textPrimary}
+                  />
+                  <AppText variant="caption" weight="semiBold">
+                    {isRTL ? 'تقديم إقرار' : 'File Tax'}
+                  </AppText>
+                  <AppText variant="caption" tone="muted">
+                    {isRTL ? 'ضريبة' : 'VAT · CT'}
+                  </AppText>
+                </Pressable>
               </View>
-            ))
-          )}
-        </Card>
+            </View>
+
+            {/* Zone 3: Statutory Deadlines & Compliance Findings */}
+            <View style={styles.zoneGroup}>
+              <Card style={styles.sectionCard}>
+                <View style={styles.sectionHeader}>
+                  <AppText variant="caption" weight="semiBold" tone="secondary">
+                    {isRTL ? 'الموعد القانوني القادم' : 'NEXT STATUTORY DEADLINE'}
+                  </AppText>
+                  {data.nextDeadline ? (
+                    <Badge label={`${data.nextDeadline.daysRemaining}d left`} variant="solid" />
+                  ) : null}
+                </View>
+                {data.nextDeadline ? (
+                  <>
+                    <AppText variant="body" weight="semiBold">
+                      {data.nextDeadline.title}
+                    </AppText>
+                    <AppText variant="caption" tone="secondary">
+                      {data.nextDeadline.legalReference} · Penalty Shield:{' '}
+                      {formatAED(data.nextDeadline.potentialPenaltyAED)}
+                    </AppText>
+                  </>
+                ) : (
+                  <AppText variant="bodySmall" tone="secondary">
+                    {isRTL
+                      ? 'لا توجد مواعيد مستحقة حالياً. قم بتحديث الإقرارات من تبويب الضرائب.'
+                      : 'No immediate statutory filings due. Run an assessment in the Tax tab.'}
+                  </AppText>
+                )}
+              </Card>
+
+              <Card style={styles.sectionCard}>
+                <AppText variant="caption" weight="semiBold" tone="secondary">
+                  {isRTL ? 'إجراءات الامتثال المفتوحة' : 'COMPLIANCE ACTIONS'}
+                </AppText>
+                {data.actions.length === 0 ? (
+                  <AppText variant="bodySmall" tone="secondary">
+                    {isRTL
+                      ? 'سجلك نظيف حالياً — لا توجد ملاحظات معلقة.'
+                      : 'All clear — no open compliance findings for this entity.'}
+                  </AppText>
+                ) : (
+                  data.actions.map((item) => (
+                    <View
+                      key={item.id}
+                      style={[styles.actionRow, { borderTopColor: colors.neutral.border }]}
+                    >
+                      <View style={styles.actionInfo}>
+                        <AppText variant="bodySmall" weight="semiBold">
+                          {item.title}
+                        </AppText>
+                        <AppText variant="caption" tone="muted">
+                          +{item.impactScore} readiness pts
+                        </AppText>
+                      </View>
+                      <Badge label={item.status} variant="outline" />
+                    </View>
+                  ))
+                )}
+              </Card>
+            </View>
+          </>
+        ) : null}
       </ScrollView>
 
       {/* Multi-Entity Switcher ModalSheet */}
@@ -431,9 +451,14 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.md,
     paddingBottom: spacing.xxl,
-    gap: spacing.md,
+    // Calibrated 24px breathing space between major dashboard zones
+    gap: layoutSpacing.sectionGap,
+  },
+  zoneGroup: {
+    // Tighter 12px rhythm binding related elements within a functional zone
+    gap: layoutSpacing.groupGap,
   },
   headerRow: {
     flexDirection: 'row',
@@ -446,7 +471,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   heroCard: {
-    gap: spacing.sm,
+    gap: spacing.md,
   },
   heroTop: {
     flexDirection: 'row',
@@ -466,7 +491,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
-    marginTop: spacing.xxs,
+    marginTop: spacing.xs,
+    gap: spacing.sm,
   },
   heroRightMetric: {
     alignItems: 'flex-end',
@@ -493,7 +519,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.xs,
     alignItems: 'center',
-    gap: 3,
+    gap: spacing.xxs,
   },
   sectionCard: {
     gap: spacing.xs,
@@ -507,8 +533,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: spacing.xs,
-    marginTop: spacing.xxs,
+    // Symmetric 12px vertical padding keeps hairline rows balanced
+    paddingVertical: layoutSpacing.rowPaddingY,
     borderTopWidth: borders.hairline,
     gap: spacing.sm,
   },

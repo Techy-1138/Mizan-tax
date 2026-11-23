@@ -37,11 +37,16 @@ export class BusinessController {
     status: 201,
     description: 'Business entity created within authenticated organisation boundary.',
   })
+  @ApiResponse({
+    status: 409,
+    description: 'Business entity is already registered with another user account.',
+  })
   async createBusiness(
     @Body() dto: CreateTradeLicenseDto,
     @CurrentUser() user: AuthenticatedUser
   ) {
-    return this.businessService.createOrUpdateTradeLicense(dto, user.organisationId);
+    // Pass authenticated user email so ownership can be recorded and masked on future conflicts
+    return this.businessService.createOrUpdateTradeLicense(dto, user.organisationId, user.email);
   }
 
   @Post('trade-license')
@@ -51,11 +56,40 @@ export class BusinessController {
     status: 201,
     description: 'Trade license saved within authenticated organisation boundary.',
   })
+  @ApiResponse({
+    status: 409,
+    description: 'Business entity is already registered with another user account.',
+  })
   async saveTradeLicense(
     @Body() dto: CreateTradeLicenseDto,
     @CurrentUser() user: AuthenticatedUser
   ) {
-    return this.businessService.createOrUpdateTradeLicense(dto, user.organisationId);
+    // Pass authenticated user email so ownership can be recorded and masked on future conflicts
+    return this.businessService.createOrUpdateTradeLicense(dto, user.organisationId, user.email);
+  }
+
+  @Get('check-availability')
+  @ApiOperation({
+    summary: 'Check whether a UAE Trade License is available or already registered to another user',
+  })
+  @ApiQuery({
+    name: 'tradeLicenseNumber',
+    required: true,
+    description: 'Trade License number to check before completing onboarding',
+    example: 'CN-4829104',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Availability result with privacy-masked owner email if already claimed.',
+  })
+  async checkAvailability(
+    @Query('tradeLicenseNumber') tradeLicenseNumber: string,
+    @CurrentUser() user: AuthenticatedUser
+  ) {
+    return this.businessService.checkTradeLicenseAvailability(
+      tradeLicenseNumber,
+      user.organisationId
+    );
   }
 
   @Get()

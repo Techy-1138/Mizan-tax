@@ -14,7 +14,7 @@ import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { AppPreferences } from '../../src/utils/preferences';
 import { runOptimisticMutation } from '../../src/utils/optimistic';
-import { borders, radii, spacing, ThemeMode } from '../../src/theme/tokens';
+import { borders, layoutSpacing, radii, spacing, ThemeMode } from '../../src/theme/tokens';
 import { AppText, Badge, Button, Card, ModalSheet, TextField } from '../../src/ui';
 
 function getInitials(name?: string | null, email?: string | null): string {
@@ -178,179 +178,177 @@ export default function ProfileScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header */}
-        <AppText variant="h2">
-          {isRTL ? 'الحساب والإعدادات' : 'Profile & Settings'}
-        </AppText>
-
-        {/* User Identity Card */}
-        <Card style={styles.identityCard}>
-          <View style={styles.identityLeft}>
-            <View style={[styles.avatar, { backgroundColor: colors.brand.primary }]}>
-              <AppText variant="body" weight="bold" tone="inverted">
-                {initials}
-              </AppText>
-            </View>
-            <View style={styles.identityInfo}>
-              <AppText variant="body" weight="bold" numberOfLines={1}>
-                {currentUser?.fullName || 'Mizan User'}
-              </AppText>
-              <AppText variant="caption" tone="secondary" numberOfLines={1}>
-                {currentUser?.email || '—'}
-              </AppText>
-              {currentUser?.username ? (
-                <AppText variant="caption" tone="muted" tabular>
-                  @{currentUser.username}
-                </AppText>
-              ) : null}
-            </View>
-          </View>
-          <Button
-            label={isRTL ? 'تعديل' : 'Edit'}
-            variant="outline"
-            size="md"
-            fullWidth={false}
-            onPress={openEditProfile}
-          />
-        </Card>
-
-        {feedback ? (
-          <View
-            style={[
-              styles.feedbackBox,
-              {
-                backgroundColor: colors.neutral.surfaceSubtle,
-                borderColor: colors.neutral.borderStrong,
-              },
-            ]}
-          >
-            <AppText variant="caption" weight="medium">
-              {feedback}
-            </AppText>
-          </View>
-        ) : null}
-
-        {/* Business Entities Card */}
-        <Card style={styles.sectionCard}>
-          <View style={styles.sectionHeader}>
-            <AppText variant="caption" weight="semiBold" tone="secondary">
-              {isRTL ? 'المنشآت التجارية' : 'BUSINESS ENTITIES'}
-            </AppText>
-            <Pressable onPress={() => router.push('/onboarding/business')}>
-              <AppText variant="caption" weight="semiBold" style={styles.underline}>
-                {isRTL ? '+ إضافة منشأة' : '+ Add Business'}
-              </AppText>
-            </Pressable>
-          </View>
-
-          {businesses.map((biz) => {
-            const isActive = biz.id === activeBusiness?.id;
-            return (
-              <Pressable
-                key={biz.id}
-                onPress={() => setActiveBusinessId(biz.id)}
-                style={[styles.bizRow, { borderTopColor: colors.neutral.border }]}
-              >
-                <View style={styles.bizInfo}>
-                  <AppText variant="bodySmall" weight="semiBold" numberOfLines={1}>
-                    {biz.legalName}
-                  </AppText>
-                  <AppText variant="caption" tone="muted" tabular>
-                    {biz.tradeLicenseNumber} · {biz.jurisdictionType}
-                  </AppText>
-                </View>
-                <Badge
-                  label={isActive ? (isRTL ? 'نشط' : 'ACTIVE') : isRTL ? 'تبديل' : 'Switch'}
-                  variant={isActive ? 'solid' : 'outline'}
-                />
-              </Pressable>
-            );
-          })}
-        </Card>
-
-        {/* Appearance & Preferences Card */}
-        <Card style={styles.sectionCard}>
-          <AppText variant="caption" weight="semiBold" tone="secondary">
-            {isRTL ? 'المظهر والتفضيلات' : 'APPEARANCE & PREFERENCES'}
+        {/* Zone 1: Header & User Identity Card */}
+        <View style={styles.zoneGroup}>
+          <AppText variant="h2">
+            {isRTL ? 'الحساب والإعدادات' : 'Profile & Settings'}
           </AppText>
 
-          {/* Theme Mode Segmented Control */}
-          <View
-            style={[
-              styles.modeBar,
-              { backgroundColor: colors.neutral.surfaceSubtle, borderColor: colors.neutral.border },
-            ]}
-          >
-            {(
-              [
-                { key: 'system', en: 'System', ar: 'النظام' },
-                { key: 'light', en: 'Light', ar: 'فاتح' },
-                { key: 'dark', en: 'Dark', ar: 'داكن' },
-              ] as const
-            ).map((opt) => {
-              const active = themeMode === opt.key;
-              return (
-                <Pressable
-                  key={opt.key}
-                  onPress={() => setThemeMode(opt.key as ThemeMode)}
-                  style={[styles.modeTab, active && { backgroundColor: colors.neutral.surface }]}
-                >
-                  <AppText
-                    variant="caption"
-                    weight="semiBold"
-                    tone={active ? 'primary' : 'secondary'}
-                  >
-                    {isRTL ? opt.ar : opt.en}
+          <Card paddingSize="lg" style={styles.identityCard}>
+            <View style={styles.identityLeft}>
+              <View style={[styles.avatar, { backgroundColor: colors.brand.primary }]}>
+                <AppText variant="body" weight="bold" tone="inverted">
+                  {initials}
+                </AppText>
+              </View>
+              <View style={styles.identityInfo}>
+                <AppText variant="body" weight="bold" numberOfLines={1}>
+                  {currentUser?.fullName || 'Mizan User'}
+                </AppText>
+                <AppText variant="caption" tone="secondary" numberOfLines={1}>
+                  {currentUser?.email || '—'}
+                </AppText>
+                {currentUser?.username ? (
+                  <AppText variant="caption" tone="muted" tabular>
+                    @{currentUser.username}
                   </AppText>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {/* Language Row */}
-          <View style={[styles.prefRow, { borderTopColor: colors.neutral.border }]}>
-            <AppText variant="bodySmall" weight="medium">
-              {isRTL ? 'اللغة (EN / العربية)' : 'Language (EN / العربية)'}
-            </AppText>
+                ) : null}
+              </View>
+            </View>
             <Button
-              label={isRTL ? 'العربية' : 'English'}
+              label={isRTL ? 'تعديل' : 'Edit'}
               variant="outline"
               size="md"
               fullWidth={false}
-              onPress={toggleLocale}
+              onPress={openEditProfile}
             />
-          </View>
+          </Card>
 
-          {/* Haptics Row */}
-          <Pressable
-            onPress={handleToggleHaptics}
-            style={[styles.prefRow, { borderTopColor: colors.neutral.border }]}
-          >
-            <AppText variant="bodySmall" weight="medium">
-              {isRTL ? 'الاهتزاز اللمسي' : 'Haptic Feedback'}
+          {feedback ? (
+            <View
+              style={[
+                styles.feedbackBox,
+                {
+                  backgroundColor: colors.neutral.surfaceSubtle,
+                  borderColor: colors.neutral.borderStrong,
+                },
+              ]}
+            >
+              <AppText variant="caption" weight="medium">
+                {feedback}
+              </AppText>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Zone 2: Business Entities & Preferences */}
+        <View style={styles.zoneGroup}>
+          <Card style={styles.sectionCard}>
+            <View style={styles.sectionHeader}>
+              <AppText variant="caption" weight="semiBold" tone="secondary">
+                {isRTL ? 'المنشآت التجارية' : 'BUSINESS ENTITIES'}
+              </AppText>
+              <Pressable onPress={() => router.push('/onboarding/business')}>
+                <AppText variant="caption" weight="semiBold" style={styles.underline}>
+                  {isRTL ? '+ إضافة منشأة' : '+ Add Business'}
+                </AppText>
+              </Pressable>
+            </View>
+
+            {businesses.map((biz) => {
+              const isActive = biz.id === activeBusiness?.id;
+              return (
+                <Pressable
+                  key={biz.id}
+                  onPress={() => setActiveBusinessId(biz.id)}
+                  style={[styles.bizRow, { borderTopColor: colors.neutral.border }]}
+                >
+                  <View style={styles.bizInfo}>
+                    <AppText variant="bodySmall" weight="semiBold" numberOfLines={1}>
+                      {biz.legalName}
+                    </AppText>
+                    <AppText variant="caption" tone="muted" tabular>
+                      {biz.tradeLicenseNumber} · {biz.jurisdictionType}
+                    </AppText>
+                  </View>
+                  <Badge
+                    label={isActive ? (isRTL ? 'نشط' : 'ACTIVE') : isRTL ? 'تبديل' : 'Switch'}
+                    variant={isActive ? 'solid' : 'outline'}
+                  />
+                </Pressable>
+              );
+            })}
+          </Card>
+
+          <Card style={styles.sectionCard}>
+            <AppText variant="caption" weight="semiBold" tone="secondary">
+              {isRTL ? 'المظهر والتفضيلات' : 'APPEARANCE & PREFERENCES'}
             </AppText>
-            <Badge
-              label={hapticsEnabled ? 'ON' : 'OFF'}
-              variant={hapticsEnabled ? 'solid' : 'outline'}
-            />
-          </Pressable>
 
-          {/* Shutter Sound Row */}
-          <Pressable
-            onPress={handleToggleShutter}
-            style={[styles.prefRow, { borderTopColor: colors.neutral.border }]}
-          >
-            <AppText variant="bodySmall" weight="medium">
-              {isRTL ? 'صوت الكاميرا' : 'Camera Shutter Sound'}
-            </AppText>
-            <Badge
-              label={shutterEnabled ? 'ON' : 'OFF'}
-              variant={shutterEnabled ? 'solid' : 'outline'}
-            />
-          </Pressable>
-        </Card>
+            <View
+              style={[
+                styles.modeBar,
+                { backgroundColor: colors.neutral.surfaceSubtle, borderColor: colors.neutral.border },
+              ]}
+            >
+              {(
+                [
+                  { key: 'system', en: 'System', ar: 'النظام' },
+                  { key: 'light', en: 'Light', ar: 'فاتح' },
+                  { key: 'dark', en: 'Dark', ar: 'داكن' },
+                ] as const
+              ).map((opt) => {
+                const active = themeMode === opt.key;
+                return (
+                  <Pressable
+                    key={opt.key}
+                    onPress={() => setThemeMode(opt.key as ThemeMode)}
+                    style={[styles.modeTab, active && { backgroundColor: colors.neutral.surface }]}
+                  >
+                    <AppText
+                      variant="caption"
+                      weight="semiBold"
+                      tone={active ? 'primary' : 'secondary'}
+                    >
+                      {isRTL ? opt.ar : opt.en}
+                    </AppText>
+                  </Pressable>
+                );
+              })}
+            </View>
 
-        {/* Danger Zone & Sign Out */}
+            <View style={[styles.prefRow, { borderTopColor: colors.neutral.border }]}>
+              <AppText variant="bodySmall" weight="medium">
+                {isRTL ? 'اللغة (EN / العربية)' : 'Language (EN / العربية)'}
+              </AppText>
+              <Button
+                label={isRTL ? 'العربية' : 'English'}
+                variant="outline"
+                size="md"
+                fullWidth={false}
+                onPress={toggleLocale}
+              />
+            </View>
+
+            <Pressable
+              onPress={handleToggleHaptics}
+              style={[styles.prefRow, { borderTopColor: colors.neutral.border }]}
+            >
+              <AppText variant="bodySmall" weight="medium">
+                {isRTL ? 'الاهتزاز اللمسي' : 'Haptic Feedback'}
+              </AppText>
+              <Badge
+                label={hapticsEnabled ? 'ON' : 'OFF'}
+                variant={hapticsEnabled ? 'solid' : 'outline'}
+              />
+            </Pressable>
+
+            <Pressable
+              onPress={handleToggleShutter}
+              style={[styles.prefRow, { borderTopColor: colors.neutral.border }]}
+            >
+              <AppText variant="bodySmall" weight="medium">
+                {isRTL ? 'صوت الكاميرا' : 'Camera Shutter Sound'}
+              </AppText>
+              <Badge
+                label={shutterEnabled ? 'ON' : 'OFF'}
+                variant={shutterEnabled ? 'solid' : 'outline'}
+              />
+            </Pressable>
+          </Card>
+        </View>
+
+        {/* Zone 3: Danger Zone & Sign Out */}
         <View style={styles.bottomActions}>
           {activeBusiness ? (
             <Button
@@ -429,9 +427,13 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
   scrollContent: {
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.md,
     paddingBottom: spacing.xxl,
-    gap: spacing.md,
+    // Calibrated 24px separation between Identity, Settings, and Sign Out zones
+    gap: layoutSpacing.sectionGap,
+  },
+  zoneGroup: {
+    gap: layoutSpacing.groupGap,
   },
   identityCard: {
     flexDirection: 'row',
@@ -469,8 +471,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: spacing.xs,
-    marginTop: spacing.xxs,
+    // Symmetric 12px vertical padding keeps entity rows centered between dividers
+    paddingVertical: layoutSpacing.rowPaddingY,
     borderTopWidth: borders.hairline,
     gap: spacing.sm,
   },
@@ -482,6 +484,7 @@ const styles = StyleSheet.create({
     borderWidth: borders.hairline,
     gap: 4,
     marginTop: spacing.xxs,
+    marginBottom: spacing.xxs,
   },
   modeTab: {
     flex: 1,
@@ -493,9 +496,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: spacing.xs,
-    marginTop: spacing.xxs,
+    paddingVertical: layoutSpacing.rowPaddingY,
     borderTopWidth: borders.hairline,
   },
-  bottomActions: { gap: spacing.xs },
+  bottomActions: { gap: layoutSpacing.groupGap },
 });

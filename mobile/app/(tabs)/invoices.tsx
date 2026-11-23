@@ -17,14 +17,26 @@ import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
 import { VisionOcr } from '../../src/services/visionOcr';
+import { AppStorage } from '../../src/utils/storage';
 import { requestCameraOsPermission } from '../../src/utils/permissions';
 import {
   createOptimisticId,
   isOptimisticId,
   runOptimisticMutation,
 } from '../../src/utils/optimistic';
-import { borders, radii, spacing } from '../../src/theme/tokens';
-import { AppText, Badge, Button, Card, ModalSheet, TextField } from '../../src/ui';
+import { borders, layoutSpacing, radii, spacing } from '../../src/theme/tokens';
+import {
+  AppText,
+  Badge,
+  Button,
+  Card,
+  LedgerSkeleton,
+  ModalSheet,
+  TextField,
+} from '../../src/ui';
+
+// Per-entity AsyncStorage cache key prefix for instant Stale-While-Revalidate Invoices hydration
+const INVOICES_CACHE_PREFIX = 'mizan_invoices_cache_';
 
 type InvoiceFilter = 'ALL' | 'DRAFT' | 'ISSUED' | 'PAID';
 type CreateMode = 'manual' | 'scan';
@@ -48,6 +60,8 @@ export default function InvoicesScreen() {
 
   const [invoices, setInvoices] = useState<any[]>([]);
   const [filter, setFilter] = useState<InvoiceFilter>('ALL');
+  // True only on uncached initial load so skeleton renders instead of premature empty-state copy
+  const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -70,12 +84,51 @@ export default function InvoicesScreen() {
     setRefreshing(true);
     try {
       const list = await MizanApi.getInvoices(activeBusiness.id);
-      setInvoices(Array.isArray(list) ? list : []);
+      const items = Array.isArray(list) ? list : [];
+      setInvoices(items);
+      // Persist per-entity SWR snapshot for 0ms mount on subsequent visits
+      AppStorage.setItem(
+        `${INVOICES_CACHE_PREFIX}${activeBusiness.id}`,
+        JSON.stringify(items)
+      ).catch(() => {});
     } catch {
-      setInvoices([]);
+      // Keep cached items if available when offline; otherwise leave empty
     } finally {
+      setInitialLoading(false);
       setRefreshing(false);
     }
+  }, [activeBusiness?.id]);
+
+  // Hydrate cached invoice list immediately on mount or entity switch (SWR)
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeBusiness?.id) {
+      setInvoices([]);
+      setInitialLoading(false);
+      return;
+    }
+
+    // Clear previous entity invoices synchronously to avoid cross-entity bleed
+    setInvoices([]);
+    setInitialLoading(true);
+
+    (async () => {
+      try {
+        const raw = await AppStorage.getItem(`${INVOICES_CACHE_PREFIX}${activeBusiness.id}`);
+        if (cancelled) return;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          setInvoices(Array.isArray(parsed) ? parsed : []);
+          setInitialLoading(false);
+        }
+      } catch {
+        // Ignore corrupt cache and wait for network response
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeBusiness?.id]);
 
   useEffect(() => {
@@ -353,187 +406,190 @@ export default function InvoicesScreen() {
           />
         }
       >
-        {/* Header */}
-        <View style={styles.headerRow}>
-          <View>
-            <AppText variant="h2">
-              {isRTL ? 'الفواتير الضريبية' : 'Tax Invoices'}
-            </AppText>
-            <AppText variant="caption" tone="secondary">
-              {isRTL
-                ? 'إيرادات المبيعات وضريبة المخرجات (5%)'
-                : 'Sales Revenue & Output VAT (5%)'}
-            </AppText>
+        {/* Zone 1: Header, Summary Card & Status Filter Chips */}
+        <View style={styles.controlsGroup}>
+          <View style={styles.headerRow}>
+            <View>
+              <AppText variant="h2">
+                {isRTL ? 'الفواتير الضريبية' : 'Tax Invoices'}
+              </AppText>
+              <AppText variant="caption" tone="secondary">
+                {isRTL
+                  ? 'إيرادات المبيعات وضريبة المخرجات (5%)'
+                  : 'Sales Revenue & Output VAT (5%)'}
+              </AppText>
+            </View>
+            <Button
+              label={isRTL ? '+ فاتورة' : '+ New Invoice'}
+              variant="primary"
+              size="md"
+              fullWidth={false}
+              onPress={() => {
+                setCreateMode('manual');
+                setCreateOpen(true);
+              }}
+            />
           </View>
-          <Button
-            label={isRTL ? '+ فاتورة' : '+ New Invoice'}
-            variant="primary"
-            size="md"
-            fullWidth={false}
-            onPress={() => {
-              setCreateMode('manual');
-              setCreateOpen(true);
-            }}
-          />
-        </View>
 
-        {/* Summary Card */}
-        <Card variant="inverted" style={styles.summaryCard}>
-          <View style={styles.summaryCol}>
-            <AppText variant="caption" tone="inverted" style={styles.summaryMuted}>
-              {isRTL ? 'إجمالي الفواتير' : 'Total Billed (YTD)'}
-            </AppText>
-            <AppText variant="h2" tone="inverted" tabular>
-              {formatAED(totalBilled)}
-            </AppText>
-          </View>
-          <View style={[styles.summaryCol, styles.summaryRight]}>
-            <AppText variant="caption" tone="inverted" style={styles.summaryMuted}>
-              {isRTL ? 'ضريبة المخرجات (5%)' : 'Output VAT (5%)'}
-            </AppText>
-            <AppText variant="h2" tone="inverted" tabular>
-              {formatAED(totalOutputVat)}
-            </AppText>
-          </View>
-        </Card>
-
-        {/* Feedback Banner */}
-        {feedback ? (
-          <View
-            style={[
-              styles.feedbackBox,
-              {
-                backgroundColor: colors.neutral.surfaceSubtle,
-                borderColor: colors.neutral.borderStrong,
-              },
-            ]}
-          >
-            <AppText variant="caption" weight="medium">
-              {feedback}
-            </AppText>
-          </View>
-        ) : null}
-
-        {/* Filter Chips */}
-        <View style={styles.filterRow}>
-          {(
-            [
-              { key: 'ALL', label: isRTL ? 'الكل' : 'All' },
-              { key: 'DRAFT', label: isRTL ? 'مسودة' : 'Draft' },
-              { key: 'ISSUED', label: isRTL ? 'صادرة' : 'Issued' },
-              { key: 'PAID', label: isRTL ? 'مدفوعة' : 'Paid' },
-            ] as const
-          ).map((chip) => {
-            const active = filter === chip.key;
-            return (
-              <Pressable
-                key={chip.key}
-                onPress={() => setFilter(chip.key)}
-                style={[
-                  styles.filterChip,
-                  {
-                    backgroundColor: active ? colors.brand.primary : colors.neutral.surface,
-                    borderColor: active ? colors.brand.primary : colors.neutral.border,
-                  },
-                ]}
-              >
-                <AppText
-                  variant="caption"
-                  weight="semiBold"
-                  tone={active ? 'inverted' : 'primary'}
-                >
-                  {chip.label}
-                </AppText>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        {/* Invoice List */}
-        {filteredInvoices.length === 0 ? (
-          <Card style={styles.emptyCard}>
-            <AppText variant="body" weight="semiBold">
-              {isRTL ? 'لا توجد فواتير بعد' : 'No tax invoices yet'}
-            </AppText>
-            <AppText variant="bodySmall" tone="secondary">
-              {isRTL
-                ? 'اضغط على + فاتورة لإنشاء فاتورة يدوياً أو مسح فاتورة حالية.'
-                : 'Tap + New Invoice to create a UAE Tax Invoice manually or scan an existing one.'}
-            </AppText>
+          <Card variant="inverted" paddingSize="lg" style={styles.summaryCard}>
+            <View style={styles.summaryCol}>
+              <AppText variant="caption" tone="inverted" style={styles.summaryMuted}>
+                {isRTL ? 'إجمالي الفواتير' : 'Total Billed (YTD)'}
+              </AppText>
+              <AppText variant="h2" tone="inverted" tabular>
+                {formatAED(totalBilled)}
+              </AppText>
+            </View>
+            <View style={[styles.summaryCol, styles.summaryRight]}>
+              <AppText variant="caption" tone="inverted" style={styles.summaryMuted}>
+                {isRTL ? 'ضريبة المخرجات (5%)' : 'Output VAT (5%)'}
+              </AppText>
+              <AppText variant="h2" tone="inverted" tabular>
+                {formatAED(totalOutputVat)}
+              </AppText>
+            </View>
           </Card>
-        ) : (
-          filteredInvoices.map((inv) => {
-            const status = (inv.status || 'DRAFT').toUpperCase();
-            const isPendingSync = isOptimisticId(inv.id);
-            const total = inv.totalAmountAED ?? inv.totalAmount ?? 0;
-            const vat = inv.vatAmountAED ?? inv.taxAmount ?? 0;
-            const number = inv.invoiceNumber || 'DRAFT';
-            const customer = inv.customer?.name || inv.customerName || 'Customer';
 
-            return (
-              <Card key={inv.id} style={styles.invCard}>
-                <View style={styles.invTop}>
-                  <View style={styles.invInfo}>
-                    <AppText variant="body" weight="semiBold" numberOfLines={1}>
-                      {customer}
-                    </AppText>
-                    <AppText variant="caption" tone="secondary" tabular>
-                      {number} · {(inv.issueDate || '').toString().slice(0, 10)}
-                    </AppText>
-                  </View>
-                  <View style={styles.invAmounts}>
-                    <AppText variant="body" weight="bold" tabular>
-                      {formatAED(total)}
-                    </AppText>
-                    <AppText variant="caption" tone="muted" tabular>
-                      VAT {Number(vat).toFixed(2)}
-                    </AppText>
-                  </View>
-                </View>
+          {feedback ? (
+            <View
+              style={[
+                styles.feedbackBox,
+                {
+                  backgroundColor: colors.neutral.surfaceSubtle,
+                  borderColor: colors.neutral.borderStrong,
+                },
+              ]}
+            >
+              <AppText variant="caption" weight="medium">
+                {feedback}
+              </AppText>
+            </View>
+          ) : null}
 
-                <View style={[styles.invFooter, { borderTopColor: colors.neutral.border }]}>
-                  <Badge
-                    label={isPendingSync ? (isRTL ? 'جاري المزامنة' : 'SYNCING') : status}
-                    variant={status === 'PAID' ? 'solid' : status === 'ISSUED' ? 'outline' : 'muted'}
-                  />
-                  <View style={styles.invActions}>
-                    <Button
-                      label="PDF"
-                      variant="outline"
-                      size="md"
-                      fullWidth={false}
-                      disabled={isPendingSync}
-                      loading={busyId === inv.id}
-                      onPress={() => handleExportPdf(inv.id)}
+          <View style={styles.filterRow}>
+            {(
+              [
+                { key: 'ALL', label: isRTL ? 'الكل' : 'All' },
+                { key: 'DRAFT', label: isRTL ? 'مسودة' : 'Draft' },
+                { key: 'ISSUED', label: isRTL ? 'صادرة' : 'Issued' },
+                { key: 'PAID', label: isRTL ? 'مدفوعة' : 'Paid' },
+              ] as const
+            ).map((chip) => {
+              const active = filter === chip.key;
+              return (
+                <Pressable
+                  key={chip.key}
+                  onPress={() => setFilter(chip.key)}
+                  style={[
+                    styles.filterChip,
+                    {
+                      backgroundColor: active ? colors.brand.primary : colors.neutral.surface,
+                      borderColor: active ? colors.brand.primary : colors.neutral.border,
+                    },
+                  ]}
+                >
+                  <AppText
+                    variant="caption"
+                    weight="semiBold"
+                    tone={active ? 'inverted' : 'primary'}
+                  >
+                    {chip.label}
+                  </AppText>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Zone 2: Invoice List (Skeleton on uncached initial load) */}
+        <View style={styles.listGroup}>
+          {initialLoading ? (
+            <LedgerSkeleton rows={3} />
+          ) : filteredInvoices.length === 0 ? (
+            <Card style={styles.emptyCard}>
+              <AppText variant="body" weight="semiBold">
+                {isRTL ? 'لا توجد فواتير بعد' : 'No tax invoices yet'}
+              </AppText>
+              <AppText variant="bodySmall" tone="secondary">
+                {isRTL
+                  ? 'اضغط على + فاتورة لإنشاء فاتورة يدوياً أو مسح فاتورة حالية.'
+                  : 'Tap + New Invoice to create a UAE Tax Invoice manually or scan an existing one.'}
+              </AppText>
+            </Card>
+          ) : (
+            filteredInvoices.map((inv) => {
+              const status = (inv.status || 'DRAFT').toUpperCase();
+              const isPendingSync = isOptimisticId(inv.id);
+              const total = inv.totalAmountAED ?? inv.totalAmount ?? 0;
+              const vat = inv.vatAmountAED ?? inv.taxAmount ?? 0;
+              const number = inv.invoiceNumber || 'DRAFT';
+              const customer = inv.customer?.name || inv.customerName || 'Customer';
+
+              return (
+                <Card key={inv.id} style={styles.invCard}>
+                  <View style={styles.invTop}>
+                    <View style={styles.invInfo}>
+                      <AppText variant="body" weight="semiBold" numberOfLines={1}>
+                        {customer}
+                      </AppText>
+                      <AppText variant="caption" tone="secondary" tabular>
+                        {number} · {(inv.issueDate || '').toString().slice(0, 10)}
+                      </AppText>
+                    </View>
+                    <View style={styles.invAmounts}>
+                      <AppText variant="body" weight="bold" tabular>
+                        {formatAED(total)}
+                      </AppText>
+                      <AppText variant="caption" tone="muted" tabular>
+                        VAT {Number(vat).toFixed(2)}
+                      </AppText>
+                    </View>
+                  </View>
+
+                  <View style={[styles.invFooter, { borderTopColor: colors.neutral.border }]}>
+                    <Badge
+                      label={isPendingSync ? (isRTL ? 'جاري المزامنة' : 'SYNCING') : status}
+                      variant={status === 'PAID' ? 'solid' : status === 'ISSUED' ? 'outline' : 'muted'}
                     />
-                    {status === 'DRAFT' ? (
+                    <View style={styles.invActions}>
                       <Button
-                        label={isRTL ? 'إصدار' : 'Issue'}
-                        variant="primary"
+                        label="PDF"
+                        variant="outline"
                         size="md"
                         fullWidth={false}
                         disabled={isPendingSync}
                         loading={busyId === inv.id}
-                        onPress={() => handleIssue(inv.id)}
+                        onPress={() => handleExportPdf(inv.id)}
                       />
-                    ) : null}
-                    {status === 'ISSUED' ? (
-                      <Button
-                        label={isRTL ? 'تأكيد الدفع' : 'Mark Paid'}
-                        variant="primary"
-                        size="md"
-                        fullWidth={false}
-                        disabled={isPendingSync}
-                        loading={busyId === inv.id}
-                        onPress={() => handleMarkPaid(inv)}
-                      />
-                    ) : null}
+                      {status === 'DRAFT' ? (
+                        <Button
+                          label={isRTL ? 'إصدار' : 'Issue'}
+                          variant="primary"
+                          size="md"
+                          fullWidth={false}
+                          disabled={isPendingSync}
+                          loading={busyId === inv.id}
+                          onPress={() => handleIssue(inv.id)}
+                        />
+                      ) : null}
+                      {status === 'ISSUED' ? (
+                        <Button
+                          label={isRTL ? 'تأكيد الدفع' : 'Mark Paid'}
+                          variant="primary"
+                          size="md"
+                          fullWidth={false}
+                          disabled={isPendingSync}
+                          loading={busyId === inv.id}
+                          onPress={() => handleMarkPaid(inv)}
+                        />
+                      ) : null}
+                    </View>
                   </View>
-                </View>
-              </Card>
-            );
-          })
-        )}
+                </Card>
+              );
+            })
+          )}
+        </View>
       </ScrollView>
 
       {/* + New Invoice ModalSheet (Manual Entry + Scan Existing Invoice) */}
@@ -676,9 +732,16 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
   scrollContent: {
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.md,
     paddingBottom: spacing.xxl,
-    gap: spacing.md,
+    // Deliberate 24px breathing space separating workspace controls from the invoice list
+    gap: layoutSpacing.sectionGap,
+  },
+  controlsGroup: {
+    gap: layoutSpacing.groupGap,
+  },
+  listGroup: {
+    gap: layoutSpacing.groupGap,
   },
   headerRow: {
     flexDirection: 'row',
@@ -726,7 +789,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: spacing.xs,
+    paddingTop: spacing.sm,
     borderTopWidth: borders.hairline,
     gap: spacing.xs,
   },

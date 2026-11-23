@@ -171,7 +171,7 @@ const styles = StyleSheet.create({
     borderTopWidth: borders.hairline,
     borderLeftWidth: borders.hairline,
     borderRightWidth: borders.hairline,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.md,
     paddingHorizontal: spacing.lg,
   },
   handle: {
@@ -187,6 +187,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: borders.hairline,
   },
   body: {
-    gap: spacing.sm,
+    // 16px vertical rhythm keeps stacked form fields and action buttons legible inside bottom sheets
+    gap: spacing.md,
   },
 });

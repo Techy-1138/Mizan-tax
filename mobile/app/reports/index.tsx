@@ -14,8 +14,8 @@ import { useBusiness } from '../../src/context/BusinessContext';
 import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
-import { borders, radii, spacing } from '../../src/theme/tokens';
-import { AppText, Badge, Button, Card, ModalSheet } from '../../src/ui';
+import { borders, layoutSpacing, radii, spacing } from '../../src/theme/tokens';
+import { AppText, Badge, Button, Card, ModalSheet, ReportsSkeleton } from '../../src/ui';
 
 type ReportTypeKey =
   | 'VAT_RETURN_201_REPORT'
@@ -67,6 +67,8 @@ export default function ComplianceReportsScreen() {
 
   const [selectedType, setSelectedType] = useState<ReportTypeKey>('VAT_RETURN_201_REPORT');
   const [reports, setReports] = useState<any[]>([]);
+  // Show layout-matched skeleton until initial reports list settles
+  const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -77,7 +79,10 @@ export default function ComplianceReportsScreen() {
   const [previewReport, setPreviewReport] = useState<any | null>(null);
 
   const loadReports = useCallback(async () => {
-    if (!activeBusiness?.id) return;
+    if (!activeBusiness?.id) {
+      setInitialLoading(false);
+      return;
+    }
     setRefreshing(true);
     try {
       const list = await MizanApi.listReports(activeBusiness.id);
@@ -85,11 +90,14 @@ export default function ComplianceReportsScreen() {
     } catch {
       setReports([]);
     } finally {
+      setInitialLoading(false);
       setRefreshing(false);
     }
   }, [activeBusiness?.id]);
 
   useEffect(() => {
+    setReports([]);
+    setInitialLoading(true);
     loadReports();
   }, [loadReports]);
 
@@ -186,118 +194,124 @@ export default function ComplianceReportsScreen() {
           />
         }
       >
-        {/* Inverted Generator Card */}
-        <Card variant="inverted" style={styles.heroCard}>
-          <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
-            {isRTL ? 'إنشاء ملف تدقيق الهيئة' : 'GENERATE FTA AUDIT PACK'}
-          </AppText>
-          <AppText variant="bodySmall" tone="inverted" style={styles.heroSub}>
-            {isRTL
-              ? 'اختر نوع التقرير للسنة المالية 2026'
-              : 'Select a statutory report type for FY 2026'}
-          </AppText>
-
-          <View style={styles.chipWrap}>
-            {REPORT_TYPES.map((rt) => {
-              const active = selectedType === rt.key;
-              return (
-                <Pressable
-                  key={rt.key}
-                  onPress={() => setSelectedType(rt.key)}
-                  style={[
-                    styles.chip,
-                    {
-                      backgroundColor: active ? colors.brand.heroText : 'transparent',
-                      borderColor: active ? colors.brand.heroText : colors.brand.heroBorder,
-                    },
-                  ]}
-                >
-                  <AppText
-                    variant="caption"
-                    weight="semiBold"
-                    tone={active ? 'primary' : 'inverted'}
-                    style={active ? { color: colors.neutral.black } : undefined}
-                  >
-                    {isRTL ? rt.ar : rt.en}
-                  </AppText>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <Button
-            label={isRTL ? 'إنشاء التقرير' : 'Generate Report'}
-            variant="onHero"
-            loading={generating}
-            onPress={handleGenerate}
-            style={{ marginTop: spacing.xs }}
-          />
-        </Card>
-
-        {feedback ? (
-          <View
-            style={[
-              styles.feedbackBox,
-              {
-                backgroundColor: colors.neutral.surfaceSubtle,
-                borderColor: colors.neutral.borderStrong,
-              },
-            ]}
-          >
-            <AppText variant="caption" weight="medium">
-              {feedback}
+        {/* Zone 1: Inverted Generator Card */}
+        <View style={styles.groupStack}>
+          <Card variant="inverted" paddingSize="lg" style={styles.heroCard}>
+            <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
+              {isRTL ? 'إنشاء ملف تدقيق الهيئة' : 'GENERATE FTA AUDIT PACK'}
             </AppText>
-          </View>
-        ) : null}
-
-        {/* Generated Reports List */}
-        {reports.length === 0 ? (
-          <Card style={styles.emptyCard}>
-            <AppText variant="body" weight="semiBold">
-              {isRTL ? 'لا توجد تقارير بعد' : 'No generated reports yet'}
-            </AppText>
-            <AppText variant="bodySmall" tone="secondary">
+            <AppText variant="bodySmall" tone="inverted" style={styles.heroSub}>
               {isRTL
-                ? 'اختر نوع التقرير واضغط إنشاء التقرير أعلاه.'
-                : 'Choose a report type above and tap Generate Report to build your FTA pack.'}
+                ? 'اختر نوع التقرير للسنة المالية 2026'
+                : 'Select a statutory report type for FY 2026'}
             </AppText>
-          </Card>
-        ) : (
-          reports.map((rep) => (
-            <Card key={rep.id} style={styles.repCard}>
-              <View style={styles.repTop}>
-                <View style={styles.repInfo}>
-                  <AppText variant="bodySmall" weight="bold" numberOfLines={1}>
-                    {rep.title || rep.reportType}
-                  </AppText>
-                  <AppText variant="caption" tone="muted" tabular>
-                    {(rep.createdAt || '').toString().slice(0, 10)} · {rep.format || 'PDF'}
-                  </AppText>
-                </View>
-                <Badge label={rep.status || 'READY'} variant="solid" />
-              </View>
 
-              <View style={[styles.repFooter, { borderTopColor: colors.neutral.border }]}>
-                <Button
-                  label={isRTL ? 'عرض' : 'View'}
-                  variant="outline"
-                  size="md"
-                  fullWidth={false}
-                  loading={busyId === rep.id}
-                  onPress={() => handleView(rep.id)}
-                />
-                <Button
-                  label={isRTL ? 'تصدير PDF' : 'Export PDF'}
-                  variant="primary"
-                  size="md"
-                  fullWidth={false}
-                  loading={busyId === rep.id}
-                  onPress={() => handleExportPdf(rep)}
-                />
-              </View>
+            <View style={styles.chipWrap}>
+              {REPORT_TYPES.map((rt) => {
+                const active = selectedType === rt.key;
+                return (
+                  <Pressable
+                    key={rt.key}
+                    onPress={() => setSelectedType(rt.key)}
+                    style={[
+                      styles.chip,
+                      {
+                        backgroundColor: active ? colors.brand.heroText : 'transparent',
+                        borderColor: active ? colors.brand.heroText : colors.brand.heroBorder,
+                      },
+                    ]}
+                  >
+                    <AppText
+                      variant="caption"
+                      weight="semiBold"
+                      tone={active ? 'primary' : 'inverted'}
+                      style={active ? { color: colors.neutral.black } : undefined}
+                    >
+                      {isRTL ? rt.ar : rt.en}
+                    </AppText>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Button
+              label={isRTL ? 'إنشاء التقرير' : 'Generate Report'}
+              variant="onHero"
+              loading={generating}
+              onPress={handleGenerate}
+              style={{ marginTop: spacing.xs }}
+            />
+          </Card>
+
+          {feedback ? (
+            <View
+              style={[
+                styles.feedbackBox,
+                {
+                  backgroundColor: colors.neutral.surfaceSubtle,
+                  borderColor: colors.neutral.borderStrong,
+                },
+              ]}
+            >
+              <AppText variant="caption" weight="medium">
+                {feedback}
+              </AppText>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Zone 2: Generated Reports List (Skeleton on initial load) */}
+        <View style={styles.groupStack}>
+          {initialLoading ? (
+            <ReportsSkeleton rows={2} />
+          ) : reports.length === 0 ? (
+            <Card style={styles.emptyCard}>
+              <AppText variant="body" weight="semiBold">
+                {isRTL ? 'لا توجد تقارير بعد' : 'No generated reports yet'}
+              </AppText>
+              <AppText variant="bodySmall" tone="secondary">
+                {isRTL
+                  ? 'اختر نوع التقرير واضغط إنشاء التقرير أعلاه.'
+                  : 'Choose a report type above and tap Generate Report to build your FTA pack.'}
+              </AppText>
             </Card>
-          ))
-        )}
+          ) : (
+            reports.map((rep) => (
+              <Card key={rep.id} style={styles.repCard}>
+                <View style={styles.repTop}>
+                  <View style={styles.repInfo}>
+                    <AppText variant="bodySmall" weight="bold" numberOfLines={1}>
+                      {rep.title || rep.reportType}
+                    </AppText>
+                    <AppText variant="caption" tone="muted" tabular>
+                      {(rep.createdAt || '').toString().slice(0, 10)} · {rep.format || 'PDF'}
+                    </AppText>
+                  </View>
+                  <Badge label={rep.status || 'READY'} variant="solid" />
+                </View>
+
+                <View style={[styles.repFooter, { borderTopColor: colors.neutral.border }]}>
+                  <Button
+                    label={isRTL ? 'عرض' : 'View'}
+                    variant="outline"
+                    size="md"
+                    fullWidth={false}
+                    loading={busyId === rep.id}
+                    onPress={() => handleView(rep.id)}
+                  />
+                  <Button
+                    label={isRTL ? 'تصدير PDF' : 'Export PDF'}
+                    variant="primary"
+                    size="md"
+                    fullWidth={false}
+                    loading={busyId === rep.id}
+                    onPress={() => handleExportPdf(rep)}
+                  />
+                </View>
+              </Card>
+            ))
+          )}
+        </View>
       </ScrollView>
 
       {/* Report Detail Preview ModalSheet */}
@@ -336,7 +350,11 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: spacing.lg,
     paddingBottom: spacing.xxl,
-    gap: spacing.md,
+    // 24px separation between Audit Pack Generator and Generated Reports list
+    gap: layoutSpacing.sectionGap,
+  },
+  groupStack: {
+    gap: layoutSpacing.groupGap,
   },
   heroCard: { gap: spacing.xs },
   heroMuted: { opacity: 0.78 },
@@ -374,7 +392,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: spacing.xs,
-    paddingTop: spacing.xs,
+    paddingTop: spacing.sm,
     borderTopWidth: borders.hairline,
   },
   previewScroll: {

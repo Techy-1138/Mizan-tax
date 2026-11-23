@@ -12,8 +12,8 @@ import { useBusiness } from '../../src/context/BusinessContext';
 import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
-import { borders, radii, spacing } from '../../src/theme/tokens';
-import { AppText, Badge, Button, Card } from '../../src/ui';
+import { borders, layoutSpacing, radii, spacing } from '../../src/theme/tokens';
+import { AppText, Badge, Button, Card, ReadinessSkeleton } from '../../src/ui';
 
 /**
  * Monochrome Detailed Tax Readiness Breakdown screen.
@@ -26,11 +26,16 @@ export default function TaxReadinessScreen() {
 
   const [readiness, setReadiness] = useState<any | null>(null);
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
+  // Show layout-matched skeleton until initial readiness payload arrives
+  const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadReadiness = useCallback(async () => {
-    if (!activeBusiness?.id) return;
+    if (!activeBusiness?.id) {
+      setInitialLoading(false);
+      return;
+    }
     setRefreshing(true);
     setError(null);
     try {
@@ -42,11 +47,14 @@ export default function TaxReadinessScreen() {
           (isRTL ? 'تعذر تحميل مؤشر الجاهزية.' : 'Could not load tax readiness breakdown.')
       );
     } finally {
+      setInitialLoading(false);
       setRefreshing(false);
     }
   }, [activeBusiness?.id, isRTL]);
 
   useEffect(() => {
+    setReadiness(null);
+    setInitialLoading(true);
     loadReadiness();
   }, [loadReadiness]);
 
@@ -94,122 +102,130 @@ export default function TaxReadinessScreen() {
           />
         }
       >
-        {/* Inverted Hero Score Card */}
-        <Card variant="inverted" style={styles.heroCard}>
-          <View style={styles.heroTop}>
-            <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
-              {isRTL ? 'مؤشر الجاهزية العام' : 'OVERALL READINESS'}
-            </AppText>
-            <View style={[styles.heroBadge, { borderColor: colors.brand.heroText }]}>
-              <AppText variant="caption" weight="semiBold" tone="inverted">
-                {readiness?.isAuditReady ? 'AUDIT READY' : 'IN PROGRESS'}
-              </AppText>
-            </View>
-          </View>
-
-          <AppText variant="display" tone="inverted" tabular>
-            {overallScore} / 100
-          </AppText>
-
-          <View style={[styles.track, { backgroundColor: colors.brand.heroBorder }]}>
-            <View
-              style={[
-                styles.fill,
-                {
-                  width: `${overallScore}%`,
-                  backgroundColor: colors.brand.heroText,
-                },
-              ]}
-            />
-          </View>
-        </Card>
-
-        {error ? (
-          <Card style={styles.errorCard}>
-            <AppText variant="bodySmall" weight="semiBold">
-              {error}
-            </AppText>
-            <Button label={isRTL ? 'إعادة المحاولة' : 'Retry'} variant="outline" onPress={loadReadiness} />
-          </Card>
-        ) : null}
-
-        {/* Category Breakdown Cards */}
-        {categories.map((cat) => {
-          const score = Math.max(0, Math.min(100, Number(cat.score ?? 0)));
-          const isOpen = expandedCat === cat.category;
-          const details: any[] = Array.isArray(cat.details) ? cat.details : [];
-
-          return (
-            <Pressable
-              key={cat.category}
-              onPress={() => setExpandedCat(isOpen ? null : cat.category)}
-            >
-              <Card style={styles.catCard}>
-                <View style={styles.catHeader}>
-                  <AppText variant="bodySmall" weight="bold">
-                    {cat.name || cat.category} ({cat.weightPercentage ?? 0}%)
-                  </AppText>
-                  <AppText variant="bodySmall" weight="bold" tabular>
-                    {score} / 100
-                  </AppText>
-                </View>
-
-                <View style={[styles.track, { backgroundColor: colors.neutral.surfaceSubtle }]}>
-                  <View
-                    style={[
-                      styles.fill,
-                      {
-                        width: `${score}%`,
-                        backgroundColor: colors.brand.primary,
-                      },
-                    ]}
-                  />
-                </View>
-
-                <AppText variant="caption" tone="secondary">
-                  {cat.passedChecks ?? 0} / {cat.totalChecks ?? 0} checks passed ·{' '}
-                  {isOpen ? 'Hide details ▲' : 'View checks ▼'}
+        {initialLoading ? (
+          <ReadinessSkeleton />
+        ) : (
+          <>
+            {/* Inverted Hero Score Card */}
+            <Card variant="inverted" paddingSize="lg" style={styles.heroCard}>
+              <View style={styles.heroTop}>
+                <AppText variant="caption" tone="inverted" style={styles.heroMuted}>
+                  {isRTL ? 'مؤشر الجاهزية العام' : 'OVERALL READINESS'}
                 </AppText>
+                <View style={[styles.heroBadge, { borderColor: colors.brand.heroText }]}>
+                  <AppText variant="caption" weight="semiBold" tone="inverted">
+                    {readiness?.isAuditReady ? 'AUDIT READY' : 'IN PROGRESS'}
+                  </AppText>
+                </View>
+              </View>
 
-                {isOpen && details.length > 0 ? (
-                  <View style={[styles.detailsBox, { borderTopColor: colors.neutral.border }]}>
-                    {details.map((d, idx) => (
-                      <View key={`${cat.category}-d-${idx}`} style={styles.detailRow}>
-                        <View style={styles.detailInfo}>
-                          <AppText variant="caption" weight="semiBold">
-                            {d.criterion}
-                          </AppText>
-                          <AppText variant="caption" tone="muted">
-                            {d.explanation}
-                            {d.statutoryRef ? ` (${d.statutoryRef})` : ''}
-                          </AppText>
-                        </View>
-                        <Badge
-                          label={d.passed ? 'PASS' : 'MISSING'}
-                          variant={d.passed ? 'solid' : 'outline'}
+              <AppText variant="display" tone="inverted" tabular>
+                {overallScore} / 100
+              </AppText>
+
+              <View style={[styles.track, { backgroundColor: colors.brand.heroBorder }]}>
+                <View
+                  style={[
+                    styles.fill,
+                    {
+                      width: `${overallScore}%`,
+                      backgroundColor: colors.brand.heroText,
+                    },
+                  ]}
+                />
+              </View>
+            </Card>
+
+            {error ? (
+              <Card style={styles.errorCard}>
+                <AppText variant="bodySmall" weight="semiBold">
+                  {error}
+                </AppText>
+                <Button label={isRTL ? 'إعادة المحاولة' : 'Retry'} variant="outline" onPress={loadReadiness} />
+              </Card>
+            ) : null}
+
+            {/* Category Breakdown Cards */}
+            <View style={styles.groupStack}>
+              {categories.map((cat) => {
+                const score = Math.max(0, Math.min(100, Number(cat.score ?? 0)));
+                const isOpen = expandedCat === cat.category;
+                const details: any[] = Array.isArray(cat.details) ? cat.details : [];
+
+                return (
+                  <Pressable
+                    key={cat.category}
+                    onPress={() => setExpandedCat(isOpen ? null : cat.category)}
+                  >
+                    <Card style={styles.catCard}>
+                      <View style={styles.catHeader}>
+                        <AppText variant="bodySmall" weight="bold">
+                          {cat.name || cat.category} ({cat.weightPercentage ?? 0}%)
+                        </AppText>
+                        <AppText variant="bodySmall" weight="bold" tabular>
+                          {score} / 100
+                        </AppText>
+                      </View>
+
+                      <View style={[styles.track, { backgroundColor: colors.neutral.surfaceSubtle }]}>
+                        <View
+                          style={[
+                            styles.fill,
+                            {
+                              width: `${score}%`,
+                              backgroundColor: colors.brand.primary,
+                            },
+                          ]}
                         />
                       </View>
-                    ))}
-                  </View>
-                ) : null}
-              </Card>
-            </Pressable>
-          );
-        })}
 
-        {/* Actionable Next Steps */}
-        {actionableSteps.length > 0 ? (
-          <Card style={styles.catCard}>
-            <AppText variant="caption" weight="semiBold" tone="secondary">
-              {isRTL ? 'الخطوات المقترحة' : 'ACTIONABLE NEXT STEPS'}
-            </AppText>
-            {actionableSteps.map((step, i) => (
-              <AppText key={`step-${i}`} variant="bodySmall" tone="secondary">
-                • {step}
-              </AppText>
-            ))}
-          </Card>
-        ) : null}
+                      <AppText variant="caption" tone="secondary">
+                        {cat.passedChecks ?? 0} / {cat.totalChecks ?? 0} checks passed ·{' '}
+                        {isOpen ? 'Hide details ▲' : 'View checks ▼'}
+                      </AppText>
+
+                      {isOpen && details.length > 0 ? (
+                        <View style={[styles.detailsBox, { borderTopColor: colors.neutral.border }]}>
+                          {details.map((d, idx) => (
+                            <View key={`${cat.category}-d-${idx}`} style={styles.detailRow}>
+                              <View style={styles.detailInfo}>
+                                <AppText variant="caption" weight="semiBold">
+                                  {d.criterion}
+                                </AppText>
+                                <AppText variant="caption" tone="muted">
+                                  {d.explanation}
+                                  {d.statutoryRef ? ` (${d.statutoryRef})` : ''}
+                                </AppText>
+                              </View>
+                              <Badge
+                                label={d.passed ? 'PASS' : 'MISSING'}
+                                variant={d.passed ? 'solid' : 'outline'}
+                              />
+                            </View>
+                          ))}
+                        </View>
+                      ) : null}
+                    </Card>
+                  </Pressable>
+                );
+              })}
+
+              {/* Actionable Next Steps */}
+              {actionableSteps.length > 0 ? (
+                <Card style={styles.catCard}>
+                  <AppText variant="caption" weight="semiBold" tone="secondary">
+                    {isRTL ? 'الخطوات المقترحة' : 'ACTIONABLE NEXT STEPS'}
+                  </AppText>
+                  {actionableSteps.map((step, i) => (
+                    <AppText key={`step-${i}`} variant="bodySmall" tone="secondary">
+                      • {step}
+                    </AppText>
+                  ))}
+                </Card>
+              ) : null}
+            </View>
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -234,7 +250,11 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: spacing.lg,
     paddingBottom: spacing.xxl,
-    gap: spacing.md,
+    // 24px separation between Hero Score Card and Category Breakdown cards
+    gap: layoutSpacing.sectionGap,
+  },
+  groupStack: {
+    gap: layoutSpacing.groupGap,
   },
   heroCard: { gap: spacing.sm },
   heroTop: {
@@ -276,6 +296,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
+    paddingVertical: spacing.xs,
     gap: spacing.sm,
   },
   detailInfo: { flex: 1, gap: 2 },

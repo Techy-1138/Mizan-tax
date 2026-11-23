@@ -29,6 +29,8 @@ export interface CardProps {
   children: ReactNode;
   variant?: CardVariant;
   padded?: boolean;
+  /** Controls internal padding density ('md' = 16px standard, 'lg' = 20px for hero cards) */
+  paddingSize?: 'md' | 'lg';
   /** Enable smooth mount fade + slide entrance (defaults to true) */
   animated?: boolean;
   /** Optional stagger delay in ms */
@@ -44,6 +46,7 @@ export function Card({
   children,
   variant = 'default',
   padded = true,
+  paddingSize = 'md',
   animated = true,
   delay = 0,
   style,
@@ -95,7 +98,7 @@ export function Card({
         styles.base,
         variant === 'default' && shadows.sm,
         variantStyle,
-        padded && styles.padded,
+        padded && (paddingSize === 'lg' ? styles.paddedLg : styles.padded),
         animatedStyle,
         style,
       ]}
@@ -114,5 +117,9 @@ const styles = StyleSheet.create({
   },
   padded: {
     padding: spacing.md,
+  },
+  paddedLg: {
+    // Slightly roomier 20px internal cushion for primary hero / summary cards
+    padding: spacing.lg,
   },
 });

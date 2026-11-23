@@ -61,13 +61,17 @@ export function getFriendlyErrorMessage(
     return isRTL ? AUTH_ERROR_MAP[authCode].ar : AUTH_ERROR_MAP[authCode].en;
   }
 
-  // Never leak raw Firebase, TypeError, or fetch stack strings to users
+  // Never leak raw Firebase, TypeError, fetch stack strings, or upstream JSON error payloads to users
   if (
     !rawMessage ||
     rawMessage.includes('Firebase:') ||
     rawMessage.includes('auth/') ||
     rawMessage.includes('Network request failed') ||
-    rawMessage.includes('TypeError')
+    rawMessage.includes('TypeError') ||
+    rawMessage.includes('Trade license extraction notice') ||
+    rawMessage.includes('NOT_FOUND') ||
+    rawMessage.includes('"error"') ||
+    rawMessage.trim().startsWith('{')
   ) {
     return isRTL ? fallbackAr : fallbackEn;
   }

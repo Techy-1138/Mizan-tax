@@ -166,6 +166,18 @@ export const spacing = {
   xxxl: 40,
 } as const;
 
+/**
+ * Semantic two-tier layout rhythm constants:
+ * - Keep intra-group controls tight (`groupGap = 12px`) so related actions feel cohesive
+ * - Add calibrated breathing space (`sectionGap = 24px`) only between distinct functional zones
+ * - Use symmetric vertical padding (`rowPaddingY = 12px`) on hairline-divided rows
+ */
+export const layoutSpacing = {
+  groupGap: spacing.sm,
+  sectionGap: spacing.xl,
+  rowPaddingY: spacing.sm,
+} as const;
+
 /** Clean Institutional FinTech border radii (12–16px primary containers) */
 export const radii = {
   sm: 8,

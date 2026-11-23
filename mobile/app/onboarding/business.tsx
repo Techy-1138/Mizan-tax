@@ -94,6 +94,22 @@ async function readUriAsBase64(uri: string): Promise<string> {
   });
 }
 
+/** Formats a localized duplicate-entity warning while keeping the registrant email masked */
+function formatAlreadyRegisteredWarning(
+  maskedEmail: string | null | undefined,
+  isRTL: boolean,
+  fallbackMessage?: string
+): string {
+  if (maskedEmail) {
+    return isRTL
+      ? `هذه المنشأة مسجلة بالفعل بالبريد الإلكتروني "${maskedEmail}". لا يمكنك تسجيلها بحساب آخر.`
+      : `Entity is already registered with "${maskedEmail}".`;
+  }
+  return isRTL
+    ? 'هذه المنشأة مسجلة بالفعل بحساب آخر.'
+    : fallbackMessage || 'Entity is already registered with another account.';
+}
+
 /**
  * Monochrome 3-Way Trade License Onboarding & 3-Step Entity Wizard.
  */
@@ -154,6 +170,24 @@ export default function BusinessOnboardingScreen() {
       // Switch to Manual wizard at Step 1 for user confirmation
       setMode('manual');
       setStep(1);
+
+      // Immediately warn the user if the extracted Trade License is already registered by another user
+      if (extracted.licenseNumber) {
+        try {
+          const availability = await MizanApi.checkBusinessAvailability(extracted.licenseNumber);
+          if (!availability.available) {
+            setError(
+              formatAlreadyRegisteredWarning(
+                availability.maskedEmail,
+                isRTL,
+                availability.message
+              )
+            );
+          }
+        } catch {
+          // Non-blocking: final submission still enforces backend uniqueness
+        }
+      }
     } catch (err: any) {
       setError(
         getFriendlyErrorMessage(
@@ -238,7 +272,17 @@ export default function BusinessOnboardingScreen() {
           return;
         }
         const base64 = await readUriAsBase64(asset.uri);
-        await applyOcrResult(base64, asset.mimeType || 'application/pdf');
+        // Normalize asset MIME type (handle missing MIME on Android content:// URIs & 'image/jpg')
+        let resolvedMime = (asset.mimeType || '').toLowerCase();
+        if (resolvedMime === 'image/jpg') resolvedMime = 'image/jpeg';
+        if (!resolvedMime || resolvedMime === 'application/octet-stream') {
+          const lowerName = (asset.name || asset.uri || '').toLowerCase();
+          if (lowerName.endsWith('.png')) resolvedMime = 'image/png';
+          else if (lowerName.endsWith('.webp')) resolvedMime = 'image/webp';
+          else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) resolvedMime = 'image/jpeg';
+          else resolvedMime = 'application/pdf';
+        }
+        await applyOcrResult(base64, resolvedMime);
       }
     } catch (err: any) {
       setError(
@@ -263,6 +307,27 @@ export default function BusinessOnboardingScreen() {
         );
         return;
       }
+
+      // Pre-check whether another user has already onboarded this Trade License
+      setSubmitting(true);
+      try {
+        const availability = await MizanApi.checkBusinessAvailability(tradeLicenseNumber.trim());
+        if (!availability.available) {
+          setError(
+            formatAlreadyRegisteredWarning(
+              availability.maskedEmail,
+              isRTL,
+              availability.message
+            )
+          );
+          return;
+        }
+      } catch {
+        // Non-blocking on transient network issues; Step 3 submission enforces authoritative check
+      } finally {
+        setSubmitting(false);
+      }
+
       setStep(2);
       return;
     }
@@ -318,14 +383,20 @@ export default function BusinessOnboardingScreen() {
       await addOrUpdateBusiness(payload);
       router.replace('/(tabs)');
     } catch (err: any) {
-      setError(
-        getFriendlyErrorMessage(
-          err,
-          isRTL,
-          'Failed to save business entity. Please try again.',
-          'تعذر حفظ بيانات المنشأة. يرجى المحاولة مرة أخرى.'
-        )
-      );
+      if (err?.code === 'ENTITY_ALREADY_REGISTERED' || err?.status === 409) {
+        setError(
+          formatAlreadyRegisteredWarning(err?.maskedEmail, isRTL, err?.message)
+        );
+      } else {
+        setError(
+          getFriendlyErrorMessage(
+            err,
+            isRTL,
+            'Failed to save business entity. Please try again.',
+            'تعذر حفظ بيانات المنشأة. يرجى المحاولة مرة أخرى.'
+          )
+        );
+      }
     } finally {
       setSubmitting(false);
     }
@@ -512,7 +583,10 @@ export default function BusinessOnboardingScreen() {
                 label={isRTL ? 'رقم الرخصة التجارية' : 'Trade License Number'}
                 placeholder="CN-4829104"
                 value={tradeLicenseNumber}
-                onChangeText={setTradeLicenseNumber}
+                onChangeText={(text) => {
+                  setTradeLicenseNumber(text);
+                  if (error) setError(null);
+                }}
                 mono
               />
               <View>

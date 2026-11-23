@@ -341,9 +341,13 @@ model Business {
   legalEntityType       LegalEntityType
   jurisdictionType      JurisdictionType
   emirate               String?                   // Dubai, Abu Dhabi, Sharjah, etc.
-  licensingAuthority    String                    // DET, DED, DIFC, ADGM, DMCC, etc.
-  tradeLicenseNumber    String
-  licenseIssueDate      DateTime?
+  licensingAuthority           String                    // DET, DED, DIFC, ADGM, DMCC, etc.
+  tradeLicenseNumber           String
+  // Canonical alphanumeric-only uppercase license key used to enforce global single-owner uniqueness across tenants
+  normalizedTradeLicenseNumber String?                   @unique
+  // Lowercased email of the user who registered/onboarded this entity (masked before cross-tenant conflict display)
+  ownerEmail                   String?
+  licenseIssueDate             DateTime?
   licenseExpiryDate     DateTime?
   verificationStatus    LicenseVerificationStatus @default(UNVERIFIED)
   businessActivities    String[]                  @default([])
@@ -377,6 +381,7 @@ model Business {
   @@unique([organisationId, tradeLicenseNumber])
   @@index([organisationId])
   @@index([tradeLicenseNumber])
+  @@index([ownerEmail])
   @@map("businesses")
 }
 

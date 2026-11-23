@@ -15,6 +15,7 @@ import { useBusiness } from '../../src/context/BusinessContext';
 import { useTheme } from '../../src/context/ThemeContext';
 import { useLocale } from '../../src/context/LocaleContext';
 import { MizanApi } from '../../src/services/api';
+import { AppStorage } from '../../src/utils/storage';
 import {
   createOptimisticId,
   isOptimisticId,
@@ -28,8 +29,19 @@ import {
   BankStatementParseResult,
   parseBankStatementCsv,
 } from '../../src/utils/bankStatementParser';
-import { borders, radii, spacing } from '../../src/theme/tokens';
-import { AppText, Badge, Button, Card, ModalSheet, TextField } from '../../src/ui';
+import { borders, layoutSpacing, radii, spacing } from '../../src/theme/tokens';
+import {
+  AppText,
+  Badge,
+  Button,
+  Card,
+  LedgerSkeleton,
+  ModalSheet,
+  TextField,
+} from '../../src/ui';
+
+// Per-entity AsyncStorage cache key prefix for instant Stale-While-Revalidate Books hydration
+const BOOKS_CACHE_PREFIX = 'mizan_books_cache_';
 
 type FilterMode = 'ALL' | 'PENDING' | 'APPROVED';
 
@@ -61,6 +73,8 @@ export default function BooksScreen() {
   const [totalSpendAED, setTotalSpendAED] = useState(0);
   const [recoverableVatAED, setRecoverableVatAED] = useState(0);
   const [filter, setFilter] = useState<FilterMode>('ALL');
+  // True only on uncached initial entity load so skeleton renders instead of a premature empty state
+  const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -92,20 +106,73 @@ export default function BooksScreen() {
         listRes.status === 'fulfilled' && Array.isArray(listRes.value) ? listRes.value : [];
       setExpenses(items);
 
+      let nextTotal = 0;
+      let nextVat = 0;
       if (summaryRes.status === 'fulfilled' && summaryRes.value) {
         const s = summaryRes.value;
-        setTotalSpendAED(Number(s.totalAmountAED ?? s.totalExpensesAED ?? 0));
-        setRecoverableVatAED(Number(s.recoverableVatAED ?? s.totalRecoverableVatAED ?? 0));
+        nextTotal = Number(s.totalAmountAED ?? s.totalExpensesAED ?? 0);
+        nextVat = Number(s.recoverableVatAED ?? s.totalRecoverableVatAED ?? 0);
       } else {
         // Fallback client-side sum when summary endpoint is unavailable
-        const sum = items.reduce((acc, e) => acc + Number(e.totalAmountAED ?? e.totalAmount ?? e.amount ?? 0), 0);
-        const vat = items.reduce((acc, e) => acc + Number(e.vatAmountAED ?? e.vatAmount ?? 0), 0);
-        setTotalSpendAED(sum);
-        setRecoverableVatAED(vat);
+        nextTotal = items.reduce((acc, e) => acc + Number(e.totalAmountAED ?? e.totalAmount ?? e.amount ?? 0), 0);
+        nextVat = items.reduce((acc, e) => acc + Number(e.vatAmountAED ?? e.vatAmount ?? 0), 0);
+      }
+      setTotalSpendAED(nextTotal);
+      setRecoverableVatAED(nextVat);
+
+      // Persist per-entity SWR snapshot for 0ms mount on subsequent visits
+      if (listRes.status === 'fulfilled') {
+        AppStorage.setItem(
+          `${BOOKS_CACHE_PREFIX}${activeBusiness.id}`,
+          JSON.stringify({
+            expenses: items,
+            totalSpendAED: nextTotal,
+            recoverableVatAED: nextVat,
+          })
+        ).catch(() => {});
       }
     } finally {
+      setInitialLoading(false);
       setRefreshing(false);
     }
+  }, [activeBusiness?.id]);
+
+  // Hydrate cached Books ledger immediately when activeBusiness changes (SWR)
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeBusiness?.id) {
+      setExpenses([]);
+      setTotalSpendAED(0);
+      setRecoverableVatAED(0);
+      setInitialLoading(false);
+      return;
+    }
+
+    // Clear previous entity state synchronously to prevent cross-entity flash
+    setExpenses([]);
+    setTotalSpendAED(0);
+    setRecoverableVatAED(0);
+    setInitialLoading(true);
+
+    (async () => {
+      try {
+        const raw = await AppStorage.getItem(`${BOOKS_CACHE_PREFIX}${activeBusiness.id}`);
+        if (cancelled) return;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          setExpenses(Array.isArray(parsed?.expenses) ? parsed.expenses : []);
+          setTotalSpendAED(Number(parsed?.totalSpendAED ?? 0));
+          setRecoverableVatAED(Number(parsed?.recoverableVatAED ?? 0));
+          setInitialLoading(false);
+        }
+      } catch {
+        // Ignore corrupt cache and wait for network response
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeBusiness?.id]);
 
   useEffect(() => {
@@ -193,7 +260,7 @@ export default function BooksScreen() {
     }
   };
 
-  /** Imports parsed debit transactions from Bank CSV as expenses */
+  /** Imports parsed debit transactions from Bank CSV optimistically into the ledger */
   const handleConfirmCsvImport = async () => {
     if (!activeBusiness?.id || !csvResult) return;
     const debits = csvResult.parsedTransactions.filter((t) => t.type === 'EXPENSE');
@@ -202,7 +269,34 @@ export default function BooksScreen() {
       return;
     }
 
+    // Build client-side SYNCING placeholder rows for instant 0ms ledger feedback
+    const optimisticRows = debits.map((tx) => ({
+      id: createOptimisticId('exp'),
+      businessId: activeBusiness.id,
+      merchantName: tx.description,
+      expenseDate: tx.date,
+      netAmountAED: tx.amountAED,
+      vatAmountAED: tx.vatRecoverableAED ?? 0,
+      totalAmountAED: tx.amountAED,
+      category: tx.category,
+      status: 'PENDING',
+    }));
+    const addedSpend = debits.reduce((sum, tx) => sum + Number(tx.amountAED || 0), 0);
+    const addedVat = debits.reduce((sum, tx) => sum + Number(tx.vatRecoverableAED || 0), 0);
+
+    const prevSnapshot = {
+      expenses,
+      totalSpendAED,
+      recoverableVatAED,
+    };
+
+    // Dismiss sheet immediately and display pending rows in the ledger
     setCsvImporting(true);
+    setCsvModalOpen(false);
+    setExpenses((prev) => [...optimisticRows, ...prev]);
+    setTotalSpendAED((prev) => prev + addedSpend);
+    setRecoverableVatAED((prev) => prev + addedVat);
+
     try {
       const results = await Promise.allSettled(
         debits.map((tx) =>
@@ -219,7 +313,20 @@ export default function BooksScreen() {
         )
       );
       const okCount = results.filter((r) => r.status === 'fulfilled').length;
-      setCsvModalOpen(false);
+
+      if (okCount === 0) {
+        // Revert optimistic placeholders if every import failed
+        setExpenses(prevSnapshot.expenses);
+        setTotalSpendAED(prevSnapshot.totalSpendAED);
+        setRecoverableVatAED(prevSnapshot.recoverableVatAED);
+        setFeedback(
+          isRTL
+            ? 'تعذر استيراد معاملات كشف البنك. يرجى المحاولة مرة أخرى.'
+            : 'Could not import bank CSV expenses. Please try again.'
+        );
+        return;
+      }
+
       setFeedback(
         isRTL
           ? `تم استيراد ${okCount} من ${debits.length} مصروفات بنجاح.`
@@ -372,208 +479,210 @@ export default function BooksScreen() {
           />
         }
       >
-        {/* Header */}
-        <View style={styles.headerRow}>
-          <View>
-            <AppText variant="h2">
-              {isRTL ? 'الدفاتر والمصروفات' : 'Books & Expenses'}
-            </AppText>
-            <AppText variant="caption" tone="secondary">
-              {isRTL
-                ? 'الإيصالات وضريبة المدخلات وكشوف البنك'
-                : 'Receipts, Input VAT & Bank CSV'}
-            </AppText>
+        {/* Zone 1: Header, Summary Hero, Actions & Filters */}
+        <View style={styles.controlsGroup}>
+          <View style={styles.headerRow}>
+            <View>
+              <AppText variant="h2">
+                {isRTL ? 'الدفاتر والمصروفات' : 'Books & Expenses'}
+              </AppText>
+              <AppText variant="caption" tone="secondary">
+                {isRTL
+                  ? 'الإيصالات وضريبة المدخلات وكشوف البنك'
+                  : 'Receipts, Input VAT & Bank CSV'}
+              </AppText>
+            </View>
+            <Badge label={`${expenses.length} items`} variant="outline" />
           </View>
-          <Badge label={`${expenses.length} items`} variant="outline" />
-        </View>
 
-        {/* Summary Hero Card */}
-        <Card variant="inverted" style={styles.summaryCard}>
-          <View style={styles.summaryCol}>
-            <AppText variant="caption" tone="inverted" style={styles.summaryMuted}>
-              {isRTL ? 'إجمالي المصروفات' : 'Total Expenses (YTD)'}
-            </AppText>
-            <AppText variant="h2" tone="inverted" tabular>
-              {formatAED(totalSpendAED)}
-            </AppText>
-          </View>
-          <View style={[styles.summaryCol, styles.summaryRight]}>
-            <AppText variant="caption" tone="inverted" style={styles.summaryMuted}>
-              {isRTL ? 'ضريبة قابلة للاسترداد' : 'Recoverable VAT'}
-            </AppText>
-            <AppText variant="h2" tone="inverted" tabular>
-              {formatAED(recoverableVatAED)}
-            </AppText>
-          </View>
-        </Card>
-
-        {/* Action Bar */}
-        <View style={styles.actionRow}>
-          <Pressable
-            onPress={handleScanReceipt}
-            disabled={busyAction === 'scan'}
-            style={[
-              styles.actionBtn,
-              { backgroundColor: colors.brand.primary, borderColor: colors.brand.primary },
-            ]}
-          >
-            <Ionicons name="camera-outline" size={16} color={colors.neutral.textInverted} />
-            <AppText variant="caption" weight="semiBold" tone="inverted">
-              {busyAction === 'scan'
-                ? isRTL
-                  ? 'جارٍ المسح...'
-                  : 'Scanning...'
-                : isRTL
-                  ? 'مسح إيصال'
-                  : 'Scan Receipt'}
-            </AppText>
-          </Pressable>
-
-          <Pressable
-            onPress={handlePickBankCsv}
-            style={[
-              styles.actionBtn,
-              { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
-            ]}
-          >
-            <Ionicons
-              name="cloud-upload-outline"
-              size={16}
-              color={colors.neutral.textPrimary}
-            />
-            <AppText variant="caption" weight="semiBold">
-              {isRTL ? 'كشف بنكي' : 'Bank CSV'}
-            </AppText>
-          </Pressable>
-
-          <Pressable
-            onPress={() => setManualOpen(true)}
-            style={[
-              styles.actionBtn,
-              { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
-            ]}
-          >
-            <Ionicons name="add-outline" size={16} color={colors.neutral.textPrimary} />
-            <AppText variant="caption" weight="semiBold">
-              {isRTL ? '+ يدوي' : '+ Manual'}
-            </AppText>
-          </Pressable>
-        </View>
-
-        {/* Feedback Banner */}
-        {feedback ? (
-          <View
-            style={[
-              styles.feedbackBox,
-              {
-                backgroundColor: colors.neutral.surfaceSubtle,
-                borderColor: colors.neutral.borderStrong,
-              },
-            ]}
-          >
-            <AppText variant="caption" weight="medium">
-              {feedback}
-            </AppText>
-          </View>
-        ) : null}
-
-        {/* Filter Chips */}
-        <View style={styles.filterRow}>
-          {(
-            [
-              { key: 'ALL', label: isRTL ? 'الكل' : 'All' },
-              { key: 'PENDING', label: isRTL ? `قيد المراجعة (${pendingCount})` : `Pending (${pendingCount})` },
-              { key: 'APPROVED', label: isRTL ? 'معتمد' : 'Approved' },
-            ] as const
-          ).map((chip) => {
-            const active = filter === chip.key;
-            return (
-              <Pressable
-                key={chip.key}
-                onPress={() => setFilter(chip.key)}
-                style={[
-                  styles.filterChip,
-                  {
-                    backgroundColor: active ? colors.brand.primary : colors.neutral.surface,
-                    borderColor: active ? colors.brand.primary : colors.neutral.border,
-                  },
-                ]}
-              >
-                <AppText
-                  variant="caption"
-                  weight="semiBold"
-                  tone={active ? 'inverted' : 'primary'}
-                >
-                  {chip.label}
-                </AppText>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        {/* Expense Ledger List */}
-        {filteredExpenses.length === 0 ? (
-          <Card style={styles.emptyCard}>
-            <AppText variant="body" weight="semiBold">
-              {isRTL ? 'لا توجد مصروفات بعد' : 'No expenses recorded'}
-            </AppText>
-            <AppText variant="bodySmall" tone="secondary">
-              {isRTL
-                ? 'امسح إيصالاً أو استورد كشفاً بنكياً بصيغة CSV للبدء.'
-                : 'Scan a receipt, import a UAE bank CSV, or add a manual expense to start.'}
-            </AppText>
+          <Card variant="inverted" paddingSize="lg" style={styles.summaryCard}>
+            <View style={styles.summaryCol}>
+              <AppText variant="caption" tone="inverted" style={styles.summaryMuted}>
+                {isRTL ? 'إجمالي المصروفات' : 'Total Expenses (YTD)'}
+              </AppText>
+              <AppText variant="h2" tone="inverted" tabular>
+                {formatAED(totalSpendAED)}
+              </AppText>
+            </View>
+            <View style={[styles.summaryCol, styles.summaryRight]}>
+              <AppText variant="caption" tone="inverted" style={styles.summaryMuted}>
+                {isRTL ? 'ضريبة قابلة للاسترداد' : 'Recoverable VAT'}
+              </AppText>
+              <AppText variant="h2" tone="inverted" tabular>
+                {formatAED(recoverableVatAED)}
+              </AppText>
+            </View>
           </Card>
-        ) : (
-          filteredExpenses.map((item) => {
-            const status = (item.status || 'PENDING').toUpperCase();
-            const isApproved = status === 'APPROVED';
-            const isPendingSync = isOptimisticId(item.id);
-            const total = item.totalAmountAED ?? item.totalAmount ?? item.amount ?? 0;
-            const vat = item.vatAmountAED ?? item.vatAmount ?? 0;
 
-            return (
-              <Card key={item.id} style={styles.expCard}>
-                <View style={styles.expTop}>
-                  <View style={styles.expInfo}>
-                    <AppText variant="body" weight="semiBold" numberOfLines={1}>
-                      {item.merchantName || 'Expense'}
-                    </AppText>
-                    <AppText variant="caption" tone="secondary">
-                      {(item.expenseDate || '').toString().slice(0, 10)} ·{' '}
-                      {item.category || 'GENERAL'}
-                    </AppText>
-                  </View>
-                  <View style={styles.expAmounts}>
-                    <AppText variant="body" weight="bold" tabular>
-                      {formatAED(total)}
-                    </AppText>
-                    <AppText variant="caption" tone="muted" tabular>
-                      VAT {Number(vat).toFixed(2)}
-                    </AppText>
-                  </View>
-                </View>
+          <View style={styles.actionRow}>
+            <Pressable
+              onPress={handleScanReceipt}
+              disabled={busyAction === 'scan'}
+              style={[
+                styles.actionBtn,
+                { backgroundColor: colors.brand.primary, borderColor: colors.brand.primary },
+              ]}
+            >
+              <Ionicons name="camera-outline" size={16} color={colors.neutral.textInverted} />
+              <AppText variant="caption" weight="semiBold" tone="inverted">
+                {busyAction === 'scan'
+                  ? isRTL
+                    ? 'جارٍ المسح...'
+                    : 'Scanning...'
+                  : isRTL
+                    ? 'مسح إيصال'
+                    : 'Scan Receipt'}
+              </AppText>
+            </Pressable>
 
-                <View style={[styles.expFooter, { borderTopColor: colors.neutral.border }]}>
-                  <Badge
-                    label={isPendingSync ? (isRTL ? 'جاري المزامنة' : 'SYNCING') : status}
-                    variant={isApproved ? 'solid' : 'outline'}
-                  />
-                  {!isApproved ? (
-                    <Button
-                      label={isRTL ? 'اعتماد' : 'Approve'}
-                      variant="primary"
-                      size="md"
-                      fullWidth={false}
-                      disabled={isPendingSync}
-                      loading={busyAction === item.id}
-                      onPress={() => handleApprove(item.id)}
+            <Pressable
+              onPress={handlePickBankCsv}
+              style={[
+                styles.actionBtn,
+                { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
+              ]}
+            >
+              <Ionicons
+                name="cloud-upload-outline"
+                size={16}
+                color={colors.neutral.textPrimary}
+              />
+              <AppText variant="caption" weight="semiBold">
+                {isRTL ? 'كشف بنكي' : 'Bank CSV'}
+              </AppText>
+            </Pressable>
+
+            <Pressable
+              onPress={() => setManualOpen(true)}
+              style={[
+                styles.actionBtn,
+                { backgroundColor: colors.neutral.surface, borderColor: colors.neutral.border },
+              ]}
+            >
+              <Ionicons name="add-outline" size={16} color={colors.neutral.textPrimary} />
+              <AppText variant="caption" weight="semiBold">
+                {isRTL ? '+ يدوي' : '+ Manual'}
+              </AppText>
+            </Pressable>
+          </View>
+
+          {feedback ? (
+            <View
+              style={[
+                styles.feedbackBox,
+                {
+                  backgroundColor: colors.neutral.surfaceSubtle,
+                  borderColor: colors.neutral.borderStrong,
+                },
+              ]}
+            >
+              <AppText variant="caption" weight="medium">
+                {feedback}
+              </AppText>
+            </View>
+          ) : null}
+
+          <View style={styles.filterRow}>
+            {(
+              [
+                { key: 'ALL', label: isRTL ? 'الكل' : 'All' },
+                { key: 'PENDING', label: isRTL ? `قيد المراجعة (${pendingCount})` : `Pending (${pendingCount})` },
+                { key: 'APPROVED', label: isRTL ? 'معتمد' : 'Approved' },
+              ] as const
+            ).map((chip) => {
+              const active = filter === chip.key;
+              return (
+                <Pressable
+                  key={chip.key}
+                  onPress={() => setFilter(chip.key)}
+                  style={[
+                    styles.filterChip,
+                    {
+                      backgroundColor: active ? colors.brand.primary : colors.neutral.surface,
+                      borderColor: active ? colors.brand.primary : colors.neutral.border,
+                    },
+                  ]}
+                >
+                  <AppText
+                    variant="caption"
+                    weight="semiBold"
+                    tone={active ? 'inverted' : 'primary'}
+                  >
+                    {chip.label}
+                  </AppText>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Zone 2: Expense Ledger List (Skeleton on uncached initial load) */}
+        <View style={styles.ledgerGroup}>
+          {initialLoading ? (
+            <LedgerSkeleton rows={3} />
+          ) : filteredExpenses.length === 0 ? (
+            <Card style={styles.emptyCard}>
+              <AppText variant="body" weight="semiBold">
+                {isRTL ? 'لا توجد مصروفات بعد' : 'No expenses recorded'}
+              </AppText>
+              <AppText variant="bodySmall" tone="secondary">
+                {isRTL
+                  ? 'امسح إيصالاً أو استورد كشفاً بنكياً بصيغة CSV للبدء.'
+                  : 'Scan a receipt, import a UAE bank CSV, or add a manual expense to start.'}
+              </AppText>
+            </Card>
+          ) : (
+            filteredExpenses.map((item) => {
+              const status = (item.status || 'PENDING').toUpperCase();
+              const isApproved = status === 'APPROVED';
+              const isPendingSync = isOptimisticId(item.id);
+              const total = item.totalAmountAED ?? item.totalAmount ?? item.amount ?? 0;
+              const vat = item.vatAmountAED ?? item.vatAmount ?? 0;
+
+              return (
+                <Card key={item.id} style={styles.expCard}>
+                  <View style={styles.expTop}>
+                    <View style={styles.expInfo}>
+                      <AppText variant="body" weight="semiBold" numberOfLines={1}>
+                        {item.merchantName || 'Expense'}
+                      </AppText>
+                      <AppText variant="caption" tone="secondary">
+                        {(item.expenseDate || '').toString().slice(0, 10)} ·{' '}
+                        {item.category || 'GENERAL'}
+                      </AppText>
+                    </View>
+                    <View style={styles.expAmounts}>
+                      <AppText variant="body" weight="bold" tabular>
+                        {formatAED(total)}
+                      </AppText>
+                      <AppText variant="caption" tone="muted" tabular>
+                        VAT {Number(vat).toFixed(2)}
+                      </AppText>
+                    </View>
+                  </View>
+
+                  <View style={[styles.expFooter, { borderTopColor: colors.neutral.border }]}>
+                    <Badge
+                      label={isPendingSync ? (isRTL ? 'جاري المزامنة' : 'SYNCING') : status}
+                      variant={isApproved ? 'solid' : 'outline'}
                     />
-                  ) : null}
-                </View>
-              </Card>
-            );
-          })
-        )}
+                    {!isApproved ? (
+                      <Button
+                        label={isRTL ? 'اعتماد' : 'Approve'}
+                        variant="primary"
+                        size="md"
+                        fullWidth={false}
+                        disabled={isPendingSync}
+                        loading={busyAction === item.id}
+                        onPress={() => handleApprove(item.id)}
+                      />
+                    ) : null}
+                  </View>
+                </Card>
+              );
+            })
+          )}
+        </View>
       </ScrollView>
 
       {/* Manual Expense ModalSheet */}
@@ -682,9 +791,16 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.md,
     paddingBottom: spacing.xxl,
-    gap: spacing.md,
+    // Deliberate 24px breathing space separating workspace controls from the ledger stream
+    gap: layoutSpacing.sectionGap,
+  },
+  controlsGroup: {
+    gap: layoutSpacing.groupGap,
+  },
+  ledgerGroup: {
+    gap: layoutSpacing.groupGap,
   },
   headerRow: {
     flexDirection: 'row',
@@ -758,7 +874,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: spacing.xs,
+    paddingTop: spacing.sm,
     borderTopWidth: borders.hairline,
   },
   twoCol: {

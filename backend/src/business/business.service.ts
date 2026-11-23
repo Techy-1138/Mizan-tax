@@ -10,7 +10,15 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
+import { getAuth } from 'firebase-admin/auth';
+import { FirebaseService } from '../auth/firebase.service';
+import {
+  buildAlreadyRegisteredMessage,
+  maskEmail,
+  normalizeTradeLicenseNumber,
+} from './business-identity.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTradeLicenseDto } from './dto/create-trade-license.dto';
 import { UpdateBusinessDto } from './dto/update-business.dto';
@@ -26,6 +34,8 @@ import { Decimal } from 'decimal.js';
 export interface BusinessRecord {
   id: string;
   organisationId: string;
+  // Lowercased email of the user who originally onboarded this entity
+  ownerEmail?: string;
   legalName: string;
   tradeName?: string;
   legalEntityType: string;
@@ -49,6 +59,13 @@ export interface BusinessRecord {
   icon?: string;
 }
 
+export interface BusinessAvailabilityResponse {
+  available: boolean;
+  ownedByCurrentUser: boolean;
+  maskedEmail: string | null;
+  message?: string;
+}
+
 @Injectable()
 export class BusinessService {
   constructor(private readonly prisma: PrismaService) {}
@@ -60,6 +77,7 @@ export class BusinessService {
     {
       id: 'biz-1234567',
       organisationId: 'org-a-flexflow',
+      ownerEmail: 'hamza@flexflow.ae',
       legalName: 'Al Nahda Trading LLC',
       tradeName: 'Al Nahda Trading',
       legalEntityType: 'LLC',
@@ -83,6 +101,7 @@ export class BusinessService {
     {
       id: 'biz-fz-892144',
       organisationId: 'org-b-competitor',
+      ownerEmail: 'tariq@skyline.ae',
       legalName: 'Desert Cloud Solutions FZE',
       tradeName: 'Desert Cloud',
       legalEntityType: 'FREE_ZONE_ESTABLISHMENT',
@@ -106,6 +125,7 @@ export class BusinessService {
     {
       id: 'biz-fl-440912',
       organisationId: 'org-a-flexflow',
+      ownerEmail: 'hamza@flexflow.ae',
       legalName: 'Hamza Al Mansoori (Tech & Design Consulting)',
       tradeName: 'Hamza Consulting',
       legalEntityType: 'NATURAL_PERSON',
@@ -196,9 +216,191 @@ export class BusinessService {
   }
 
   /**
-   * Persists a verified or scanned trade license profile strictly within the authenticated organisation boundary.
+   * Resolves the original registrant's email address for an existing business record.
+   * Checks stored ownerEmail, sandbox demo mappings, PostgreSQL memberships, and Firebase Auth UIDs.
    */
-  public async createOrUpdateTradeLicense(dto: CreateTradeLicenseDto, authenticatedOrgId: string): Promise<BusinessRecord> {
+  private async resolveOwnerEmail(existing: {
+    id?: string;
+    ownerEmail?: string | null;
+    organisationId?: string | null;
+  }): Promise<string | null> {
+    if (existing.ownerEmail && existing.ownerEmail.includes('@')) {
+      return existing.ownerEmail.trim().toLowerCase();
+    }
+
+    const orgId = existing.organisationId || '';
+
+    // 1. Known sandbox demo organisation mappings
+    const demoEmailsByOrg: Record<string, string> = {
+      'org-a-flexflow': 'hamza@flexflow.ae',
+      'org-b-competitor': 'tariq@skyline.ae',
+      'org-platform-super': 'compliance@mizan.ae',
+    };
+    if (demoEmailsByOrg[orgId]) {
+      return demoEmailsByOrg[orgId];
+    }
+
+    // 2. Query PostgreSQL Membership -> User for traditional/synced organisations
+    if (
+      process.env.DATABASE_URL &&
+      orgId &&
+      typeof (this.prisma as any)?.membership?.findFirst === 'function'
+    ) {
+      try {
+        const membership = await (this.prisma as any).membership.findFirst({
+          where: { organisationId: orgId },
+          include: { user: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        const memberEmail = membership?.user?.email?.trim().toLowerCase();
+        if (memberEmail) {
+          return memberEmail;
+        }
+      } catch {
+        // Non-fatal: continue to Firebase UID lookup
+      }
+    }
+
+    // 3. Resolve legacy Firebase stateless org IDs (org-<uid>) via Firebase Admin Auth
+    if (orgId.startsWith('org-')) {
+      const firebaseUid = orgId.slice(4);
+      if (firebaseUid) {
+        try {
+          const fbApp = FirebaseService.initAdmin();
+          const fbUser = await getAuth(fbApp).getUser(firebaseUid);
+          const fbEmail = fbUser?.email?.trim().toLowerCase();
+          if (fbEmail) {
+            // Best-effort backfill of ownerEmail onto Business row so future checks avoid Auth RPCs
+            if (
+              existing.id &&
+              process.env.DATABASE_URL &&
+              typeof (this.prisma as any)?.business?.update === 'function'
+            ) {
+              (this.prisma as any).business
+                .update({
+                  where: { id: existing.id },
+                  data: { ownerEmail: fbEmail },
+                })
+                .catch(() => {});
+            }
+            return fbEmail;
+          }
+        } catch {
+          // Firebase Admin credentials may be absent in local/unit test runs
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Throws a standardized 409 Conflict exception with a privacy-masked owner email
+   * when another organisation attempts to onboard an already registered entity.
+   */
+  private async throwAlreadyRegisteredConflict(existing: {
+    id?: string;
+    ownerEmail?: string | null;
+    organisationId?: string | null;
+  }): Promise<never> {
+    const rawEmail = await this.resolveOwnerEmail(existing);
+    const maskedEmail = maskEmail(rawEmail);
+    const message = buildAlreadyRegisteredMessage(maskedEmail);
+    throw new ConflictException({
+      statusCode: 409,
+      code: 'ENTITY_ALREADY_REGISTERED',
+      maskedEmail,
+      message,
+    });
+  }
+
+  /**
+   * Finds an existing business matching a Trade License across PostgreSQL (when available)
+   * and the in-memory entity store using canonical normalized matching.
+   */
+  private async findExistingBusinessByLicense(rawLicenseNumber: string): Promise<any | null> {
+    const trimmed = rawLicenseNumber.trim();
+    const normalized = normalizeTradeLicenseNumber(trimmed);
+    if (!normalized) return null;
+
+    if (
+      process.env.DATABASE_URL &&
+      typeof (this.prisma as any)?.business?.findFirst === 'function'
+    ) {
+      try {
+        const dbMatch = await (this.prisma as any).business.findFirst({
+          where: {
+            OR: [
+              { normalizedTradeLicenseNumber: normalized },
+              { tradeLicenseNumber: { equals: trimmed, mode: 'insensitive' } },
+            ],
+          },
+        });
+        if (dbMatch) return dbMatch;
+      } catch {
+        // Fallback to in-memory check when DB is unavailable in unit tests
+      }
+    }
+
+    return (
+      this.defaultEntities.find(
+        (b) => normalizeTradeLicenseNumber(b.tradeLicenseNumber) === normalized
+      ) || null
+    );
+  }
+
+  /**
+   * Checks whether a UAE Trade License number is available for onboarding by the caller,
+   * returning a privacy-masked owner email if already registered to another user.
+   */
+  public async checkTradeLicenseAvailability(
+    tradeLicenseNumber: string,
+    authenticatedOrgId: string
+  ): Promise<BusinessAvailabilityResponse> {
+    const normalized = normalizeTradeLicenseNumber(tradeLicenseNumber);
+    if (!normalized) {
+      throw new BadRequestException('tradeLicenseNumber query parameter is required');
+    }
+
+    const existing = await this.findExistingBusinessByLicense(tradeLicenseNumber);
+    if (!existing) {
+      return {
+        available: true,
+        ownedByCurrentUser: false,
+        maskedEmail: null,
+      };
+    }
+
+    if (
+      existing.organisationId === authenticatedOrgId ||
+      authenticatedOrgId === 'org-platform-super'
+    ) {
+      return {
+        available: true,
+        ownedByCurrentUser: true,
+        maskedEmail: null,
+      };
+    }
+
+    const rawEmail = await this.resolveOwnerEmail(existing);
+    const maskedEmail = maskEmail(rawEmail);
+    return {
+      available: false,
+      ownedByCurrentUser: false,
+      maskedEmail,
+      message: buildAlreadyRegisteredMessage(maskedEmail),
+    };
+  }
+
+  /**
+   * Persists a verified or scanned trade license profile strictly within the authenticated organisation boundary.
+   * Enforces global single-owner uniqueness across users and warns with a masked owner email on conflict.
+   */
+  public async createOrUpdateTradeLicense(
+    dto: CreateTradeLicenseDto,
+    authenticatedOrgId: string,
+    authenticatedUserEmail?: string
+  ): Promise<BusinessRecord> {
     if (
       dto.organisationId &&
       authenticatedOrgId &&
@@ -215,18 +417,34 @@ export class BusinessService {
       throw new BadRequestException('Authenticated organisationId is required');
     }
 
-    // Prevent cross-tenant overwrite of another organisation's license
+    const cleanedLicense = dto.tradeLicenseNumber.trim();
+    const normalizedLicense = normalizeTradeLicenseNumber(cleanedLicense);
+    if (!normalizedLicense) {
+      throw new BadRequestException('tradeLicenseNumber is required');
+    }
+
+    const callerEmail = authenticatedUserEmail?.trim().toLowerCase() || undefined;
+
+    // 1. Authoritative global uniqueness guard across both PostgreSQL and in-memory entities
+    const existingGlobal = await this.findExistingBusinessByLicense(cleanedLicense);
+    if (
+      existingGlobal &&
+      existingGlobal.organisationId !== effectiveOrgId &&
+      authenticatedOrgId !== 'org-platform-super'
+    ) {
+      await this.throwAlreadyRegisteredConflict(existingGlobal);
+    }
+
+    // Also check in-memory list directly in case DB returned a different record or DB was empty
     const existingEntity = this.defaultEntities.find(
-      (b) => b.tradeLicenseNumber === dto.tradeLicenseNumber
+      (b) => normalizeTradeLicenseNumber(b.tradeLicenseNumber) === normalizedLicense
     );
     if (
       existingEntity &&
       existingEntity.organisationId !== effectiveOrgId &&
       authenticatedOrgId !== 'org-platform-super'
     ) {
-      throw new ForbiddenException(
-        `Cross-tenant violation: Cannot overwrite business '${dto.tradeLicenseNumber}' owned by organisation '${existingEntity.organisationId}'`
-      );
+      await this.throwAlreadyRegisteredConflict(existingEntity);
     }
 
     const issueDateStr = dto.issueDate || '2024-05-15';
@@ -244,10 +462,16 @@ export class BusinessService {
     // Verification status rule: OCR extraction is marked 'OCR_EXTRACTED', not 'REGISTRY_VERIFIED'
     const verificationStatus = dto.verificationStatus || 'OCR_EXTRACTED';
 
-    if (process.env.DATABASE_URL) {
+    const hasPrismaBusiness =
+      process.env.DATABASE_URL &&
+      typeof (this.prisma as any)?.organisation?.upsert === 'function' &&
+      typeof (this.prisma as any)?.business?.create === 'function' &&
+      typeof (this.prisma as any)?.business?.update === 'function';
+
+    if (hasPrismaBusiness) {
       try {
         // Ensure parent Organisation exists for Firebase stateless org IDs (e.g. org-<uid>)
-        // so Business upsert never fails with a foreign-key constraint violation (P2003).
+        // so Business write never fails with a foreign-key constraint violation (P2003).
         await (this.prisma as any).organisation.upsert({
           where: { id: effectiveOrgId },
           update: {},
@@ -258,43 +482,52 @@ export class BusinessService {
           },
         });
 
-        const business = await (this.prisma as any).business.upsert({
-          where: {
-            organisationId_tradeLicenseNumber: {
-              organisationId: effectiveOrgId,
-              tradeLicenseNumber: dto.tradeLicenseNumber,
+        // Update existing owned business (by ID if found via normalized key) or create a new one
+        let business: any;
+        if (existingGlobal?.id && existingGlobal.organisationId === effectiveOrgId) {
+          business = await (this.prisma as any).business.update({
+            where: { id: existingGlobal.id },
+            data: {
+              tradeLicenseNumber: cleanedLicense,
+              normalizedTradeLicenseNumber: normalizedLicense,
+              ...(callerEmail ? { ownerEmail: callerEmail } : {}),
+              legalName: dto.legalName,
+              tradeName: dto.tradeName,
+              licensingAuthority: dto.licensingAuthority,
+              emirate: dto.emirate || 'Dubai',
+              licenseIssueDate: issueDate,
+              licenseExpiryDate: expiryDate,
+              businessActivities: dto.businessActivities || [],
+              verificationStatus,
+              isQfzpEligible,
             },
-          },
-          update: {
-            legalName: dto.legalName,
-            tradeName: dto.tradeName,
-            licensingAuthority: dto.licensingAuthority,
-            emirate: dto.emirate || 'Dubai',
-            licenseIssueDate: issueDate,
-            licenseExpiryDate: expiryDate,
-            businessActivities: dto.businessActivities || [],
-            verificationStatus,
-            isQfzpEligible,
-          },
-          create: {
-            organisationId: effectiveOrgId,
-            tradeLicenseNumber: dto.tradeLicenseNumber,
-            legalName: dto.legalName,
-            tradeName: dto.tradeName,
-            legalEntityType: dto.legalEntityType as any,
-            jurisdictionType: dto.jurisdictionType as any,
-            licensingAuthority: dto.licensingAuthority,
-            emirate: dto.emirate || 'Dubai',
-            licenseIssueDate: issueDate,
-            licenseExpiryDate: expiryDate,
-            businessActivities: dto.businessActivities || [],
-            verificationStatus,
-            isQfzpEligible,
-          },
-        });
+          });
+        } else {
+          business = await (this.prisma as any).business.create({
+            data: {
+              organisationId: effectiveOrgId,
+              tradeLicenseNumber: cleanedLicense,
+              normalizedTradeLicenseNumber: normalizedLicense,
+              ownerEmail: callerEmail || null,
+              legalName: dto.legalName,
+              tradeName: dto.tradeName,
+              legalEntityType: dto.legalEntityType as any,
+              jurisdictionType: dto.jurisdictionType as any,
+              licensingAuthority: dto.licensingAuthority,
+              emirate: dto.emirate || 'Dubai',
+              licenseIssueDate: issueDate,
+              licenseExpiryDate: expiryDate,
+              businessActivities: dto.businessActivities || [],
+              verificationStatus,
+              isQfzpEligible,
+            },
+          });
+        }
+
         const resRecord: BusinessRecord = {
           id: business.id,
           organisationId: business.organisationId,
+          ownerEmail: business.ownerEmail || callerEmail,
           legalName: business.legalName,
           tradeName: business.tradeName || business.legalName,
           legalEntityType: business.legalEntityType,
@@ -317,7 +550,9 @@ export class BusinessService {
           updatedAt: business.updatedAt,
         };
         const existingIdx = this.defaultEntities.findIndex(
-          (b) => b.id === business.id || b.tradeLicenseNumber === dto.tradeLicenseNumber
+          (b) =>
+            b.id === business.id ||
+            normalizeTradeLicenseNumber(b.tradeLicenseNumber) === normalizedLicense
         );
         if (existingIdx >= 0) {
           this.defaultEntities[existingIdx] = resRecord;
@@ -325,16 +560,32 @@ export class BusinessService {
           this.defaultEntities.push(resRecord);
         }
         return resRecord;
-      } catch (e) {
-        console.warn('Prisma upsert fallback to memory representation:', e);
+      } catch (e: any) {
+        // Never swallow HTTP conflict/forbidden/validation exceptions
+        if (
+          e instanceof ConflictException ||
+          e instanceof ForbiddenException ||
+          e instanceof BadRequestException
+        ) {
+          throw e;
+        }
+        // Handle concurrent race condition hitting PostgreSQL unique constraint (P2002)
+        if (e?.code === 'P2002') {
+          const conflicting = await this.findExistingBusinessByLicense(cleanedLicense);
+          if (conflicting && conflicting.organisationId !== effectiveOrgId) {
+            await this.throwAlreadyRegisteredConflict(conflicting);
+          }
+        }
+        console.warn('Prisma business write fallback to memory representation:', e);
       }
     }
 
     // In-memory representation strictly bounded to effectiveOrgId
     const record: BusinessRecord = {
-      id: existingEntity?.id || `biz-${dto.tradeLicenseNumber}`,
+      id: existingEntity?.id || `biz-${cleanedLicense}`,
       organisationId: effectiveOrgId,
-      tradeLicenseNumber: dto.tradeLicenseNumber,
+      ownerEmail: callerEmail || existingEntity?.ownerEmail,
+      tradeLicenseNumber: cleanedLicense,
       legalName: dto.legalName,
       tradeName: dto.tradeName || dto.legalName,
       legalEntityType: dto.legalEntityType,
@@ -358,7 +609,7 @@ export class BusinessService {
     };
 
     const existingIdx = this.defaultEntities.findIndex(
-      (b) => b.tradeLicenseNumber === dto.tradeLicenseNumber
+      (b) => normalizeTradeLicenseNumber(b.tradeLicenseNumber) === normalizedLicense
     );
     if (existingIdx >= 0) {
       this.defaultEntities[existingIdx] = { ...this.defaultEntities[existingIdx], ...record };

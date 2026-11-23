@@ -19,6 +19,36 @@ export const STORAGE_KEY_AUTH_TOKEN = 'mizan_auth_token';
 export const STORAGE_KEY_ORG_ID = 'mizan_organisation_id';
 export const STORAGE_KEY_USER_PROFILE = 'mizan_user_profile';
 
+/**
+ * Typed API error preserving HTTP status and structured conflict metadata
+ * (such as ENTITY_ALREADY_REGISTERED and privacy-masked owner email).
+ */
+export class MizanApiError extends Error {
+  public readonly status: number;
+  public readonly code?: string;
+  public readonly maskedEmail?: string | null;
+
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    maskedEmail?: string | null
+  ) {
+    super(message);
+    this.name = 'MizanApiError';
+    this.status = status;
+    this.code = code;
+    this.maskedEmail = maskedEmail ?? null;
+  }
+}
+
+export interface BusinessAvailabilityResult {
+  available: boolean;
+  ownedByCurrentUser: boolean;
+  maskedEmail: string | null;
+  message?: string;
+}
+
 const getBaseUrl = (): string => {
   if (process.env.EXPO_PUBLIC_API_URL) {
     return process.env.EXPO_PUBLIC_API_URL;
@@ -272,6 +302,13 @@ export class MizanApi {
     await AppStorage.removeItem(STORAGE_KEY_USER_PROFILE);
     await AppStorage.removeItem('mizan_active_business_id');
     await AppStorage.removeItem('mizan_cached_businesses');
+    // Purge all per-entity Stale-While-Revalidate caches on sign-out so subsequent accounts start clean
+    await Promise.all([
+      AppStorage.removeByPrefix('mizan_dash_cache_'),
+      AppStorage.removeByPrefix('mizan_books_cache_'),
+      AppStorage.removeByPrefix('mizan_invoices_cache_'),
+      AppStorage.removeByPrefix('mizan_tax_cache_'),
+    ]);
   }
 
   public static async getProfile(): Promise<any> {
@@ -388,8 +425,37 @@ export class MizanApi {
   }
 
   /**
-   * Persists scanned and verified Trade License directly to Cloud Firestore
-   * with seamless fallback to backend API if needed
+   * Checks whether a UAE Trade License is already registered by another user.
+   * Returns availability and a privacy-masked owner email on conflict.
+   */
+  public static async checkBusinessAvailability(
+    tradeLicenseNumber: string
+  ): Promise<BusinessAvailabilityResult> {
+    await this.ensureAuthenticated();
+    const res = await fetch(
+      `${API_BASE_URL}/api/v1/businesses/check-availability?tradeLicenseNumber=${encodeURIComponent(tradeLicenseNumber.trim())}`,
+      {
+        method: 'GET',
+        headers: this.getHeaders(),
+      }
+    );
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new MizanApiError(
+        errorData.message || `Availability check failed (HTTP ${res.status})`,
+        res.status,
+        errorData.code,
+        errorData.maskedEmail ?? null
+      );
+    }
+
+    return res.json();
+  }
+
+  /**
+   * Persists scanned and verified Trade License to the backend API and mirrors
+   * to Cloud Firestore. Never falls back to Firestore on 4xx business rejections.
    */
   public static async saveTradeLicense(payload: SaveTradeLicensePayload): Promise<any> {
     try {
@@ -402,7 +468,12 @@ export class MizanApi {
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to save trade license (HTTP ${res.status})`);
+        throw new MizanApiError(
+          errorData.message || `Failed to save trade license (HTTP ${res.status})`,
+          res.status,
+          errorData.code,
+          errorData.maskedEmail ?? null
+        );
       }
 
       const saved = await res.json();
@@ -419,6 +490,15 @@ export class MizanApi {
 
       return saved;
     } catch (backendErr: any) {
+      // Strictly propagate client/conflict/tenancy errors (4xx) without bypassing to Firestore
+      if (
+        backendErr instanceof MizanApiError &&
+        backendErr.status >= 400 &&
+        backendErr.status < 500
+      ) {
+        throw backendErr;
+      }
+
       if (auth.currentUser) {
         try {
           const { FirestoreService } = require('./firestore.service');
